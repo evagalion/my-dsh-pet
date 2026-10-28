@@ -3,16 +3,41 @@
   "version": "0.1.0",
   "description": "大肥鱼桌面宠物 —— 联动本地 WorkBuddy / Cursor 的透明桌宠",
   "main": "src/main/index.js",
+  "productName": "大肥鱼",
   "scripts": {
     "start": "env -u ELECTRON_RUN_AS_NODE electron .",
     "dev": "env -u ELECTRON_RUN_AS_NODE electron . --dev",
     "selftest": "env -u ELECTRON_RUN_AS_NODE electron . --selftest --no-sandbox --disable-gpu",
     "probe": "node scripts/probe.js",
-    "icon": "node scripts/make-icon.js"
+    "icon": "node scripts/make-icon.js",
+    "dist": "CSC_IDENTITY_AUTO_DISCOVERY=false ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/ electron-builder --dir",
+    "dist:dmg": "CSC_IDENTITY_AUTO_DISCOVERY=false ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/ electron-builder --mac dmg"
   },
   "license": "MIT",
   "private": true,
   "devDependencies": {
-    "electron": "^38.1.0"
+    "electron": "^38.1.0",
+    "electron-builder": "^26.18.0"
+  },
+  "build": {
+    "appId": "com.danghaoyu.dafeiyu-pet",
+    "productName": "大肥鱼",
+    "copyright": "Copyright © 2026 danghaoyu",
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "npmRebuild": false,
+    "mac": {
+      "target": ["dir"],
+      "icon": "assets/icon.icns",
+      "category": "public.app-category.entertainment",
+      "identity": null,
+      "extendInfo": {
+        "LSUIElement": false
+      }
+    }
   }
 }
