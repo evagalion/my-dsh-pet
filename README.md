@@ -123,11 +123,38 @@ npm run icon       # 重新生成托盘图标 assets/tray.png
 
 ---
 
+## 打包成 .app
+
+```bash
+npm run icon       # 重新生成图标：assets/tray.png(64) + icon-1024.png + icon.icns
+npm run dist       # 产出 dist/大肥鱼.app（约 305MB：Electron 框架 250MB + 素材 52MB）
+npm run dist:dmg   # 顺带打一个 dmg 安装包
+```
+
+打包配置写在 `package.json` 的 `build` 字段：`appId=com.danghaoyu.dafeiyu-pet`、显示名「大肥鱼」、图标 `assets/icon.icns`、跳过签名（`identity: null`，本地自用不需要开发者证书）。两个脚本都走 npmmirror 镜像拉 Electron，避免 GitHub 下载超时。
+
+> 如果你的终端环境禁止删除文件（某些带安全代理的 shell 会拦 `fs.unlink`），electron-builder 会在释放 lockfile 那一步失败。可以手工组装，效果和 electron-packager 一样：
+> ```bash
+> mkdir -p dist && cp -R node_modules/electron/dist/Electron.app dist/大肥鱼.app
+> mkdir -p dist/大肥鱼.app/Contents/Resources/app
+> cp -R src assets package.json dist/大肥鱼.app/Contents/Resources/app/
+> cp assets/icon.icns dist/大肥鱼.app/Contents/Resources/electron.icns
+> plutil -replace CFBundleDisplayName -string "大肥鱼" dist/大肥鱼.app/Contents/Info.plist
+> plutil -replace CFBundleName       -string "大肥鱼" dist/大肥鱼.app/Contents/Info.plist
+> plutil -replace CFBundleIdentifier -string "com.danghaoyu.dafeiyu-pet" dist/大肥鱼.app/Contents/Info.plist
+> codesign --force --deep --sign - dist/大肥鱼.app
+> ```
+> Electron 的加载顺序是 `app.asar` → `app/` → `default_app.asar`，所以放进 `Contents/Resources/app/` 就会优先加载我们的应用，不用去动 `default_app.asar`。
+
+打包后首次启动注意两点：**先退出 `npm start` 那个实例**（否则桌面上会有两条鱼）；**窗口位置会回到默认右下角**，因为 bundle id 变了，配置存在新的 userData 目录里。
+
+---
+
 ## 已知限制 & 后续可做
 
 1. **状态是推断的，不是事件**。现在靠轮询文件时间戳，粒度到「秒」。想要「这一步 Bash 跑完了」这种精确事件，需要给 CodeBuddy Code 的 `~/.codebuddy/settings.json` 配 hooks，在 `UserPromptSubmit` / `Stop` 时 POST 给桌宠——这是侵入式改动，等你想要再说。
 2. **素材是复用的**，授权见下。想彻底自有化，可以走 dsh-pet 的素材链（AI 生成 + 绿幕抠像 + 转 VP9-Alpha webm），需要 brew 装 ffmpeg。
-3. **还没打包成 .app**，现在靠 `npm start` 跑。要打包需要装 electron-builder。
+3. 只打了 **macOS arm64**（你本机架构）。要出 Intel 版或 Windows / Linux 版，改 `build.mac.target` 并加对应平台配置即可。
 4. 余额/对话/语音没做（dsh-pet 有，但依赖 DSH 的模型和接口，跟本机联动关系不大）。
 
 ---
