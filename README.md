@@ -80,9 +80,9 @@ npm run icon       # 重新生成托盘图标 assets/tray.png
 
 **右键 → `各 agent 状态`** 会列出三路各自的实时状态（哪个在忙、忙哪个项目/问题），点某一路可以让鱼立刻切过去显示它——不会只看得到「最忙的那个」。
 
-### 提示音
+### 提示音 / 提示语音
 
-状态一变就响一声，**每个 agent 音色不同**，不用看屏幕也知道是谁在动：
+默认 **语音播报**（可爱萝莉音）：状态一变就用系统 TTS 念一句，**每个 agent 音色不同**，不用看屏幕也知道是谁在动。
 
 | 事件 | 什么时候响 | 声音 |
 | --- | --- | --- |
@@ -93,7 +93,29 @@ npm run icon       # 重新生成托盘图标 assets/tray.png
 
 音色按 agent 区分：**WorkBuddy 620Hz 温和 / Cursor 760Hz 偏亮 / CodeBuddy 500Hz 低沉**（`scripts/make-sfx.js` 里改基频和泛音配比）。
 
-音效是**手写合成的**（基频 + 二次/三次泛音 + 指数衰减包络，直接写 WAV 头），`npm run sfx` 生成 12 个文件共 600KB —— 不引音频库、不用第三方素材，也就没有版权问题。
+**语音模式**（默认）用 macOS 自带的 `say`，不装任何东西：
+
+| 配置项 | 默认 | 说明 |
+| --- | --- | --- |
+| `voice.name` | `Meijia` | 音色。系统里可选：`Meijia`（美佳，最甜最年轻，推荐）、`Tingting`（婷婷，字正腔圆的大陆普通话）、`Sinji`（粤语）、`Sandy` / `Shelley` / `Flo` 等。想看全量列表：`say -v '?' \| grep zh_` |
+| `voice.rate` | `205` | 语速（字/分钟），调小更慢更软 |
+| `voice.pitch` | `90` | **音调抬高的量**，越大越稚嫩 —— 萝莉感主要靠它（实测 `[[pbas +90]]` 让过零率从 4145Hz 升到 4956Hz，音调确实抬上去了） |
+| `voice.lines` | 见下 | 台词，`{agent}` 换成 agent 名、`{what}` 换成正在处理的问题 |
+
+默认台词：
+
+```json
+"lines": {
+  "start":   "{agent}开始干活啦~",
+  "done":    "这一轮搞定啦，真棒！",
+  "error":   "诶呀，好像出错了呢",
+  "waiting": "主人，等你确认一下下~"
+}
+```
+
+> 想要更可爱：把 `pitch` 调到 110~130、`rate` 调到 190；想要正经一点：换 `Tingting` 并把 `pitch` 降到 30。系统设置 → 辅助功能 → 朗读内容 → 声音 里还能下载更多中文音色（比如下了 `Tianyi` 之类的高级音色，直接填进 `voice.name` 即可）。
+
+**音效模式**是手写合成的（基频 + 二次/三次泛音 + 指数衰减包络，直接写 WAV 头），`npm run sfx` 生成 12 个文件共 600KB —— 不引音频库、不用第三方素材，也就没有版权问题。语音不可用时（比如非 macOS）会自动退回音效。
 
 几个防吵的设计：
 
@@ -103,10 +125,11 @@ npm run icon       # 重新生成托盘图标 assets/tray.png
 - **刚启动那一下不响**，免得每次开桌宠都「叮」
 - 播放走系统 `afplay`、不经过渲染层：窗口没焦点也响，也不受 Chromium 自动播放策略限制
 
-右键菜单有 **「提示音：开/关」**，状态会记住。音量和事件映射在 `pet.config.json` 的 `sound` 字段里改：
+右键菜单的 **「提示音：语音 / 音效 / 关」** 是三态循环，切完立刻念一句让你听效果，选择会记住。音量和事件映射在 `pet.config.json` 的 `sound` 字段里改：
 
 ```json
-"sound": { "enabled": true, "volume": 0.35, "minGapMs": 6000,
+"sound": { "enabled": true, "mode": "voice", "volume": 0.35, "minGapMs": 6000,
+  "voice": { "name": "Meijia", "rate": 205, "pitch": 90, "lines": { ... } },
   "on": { "working": "start", "success": "done", "error": "error",
           "waiting": "waiting", "thinking": false, "organizing": false } }
 ```

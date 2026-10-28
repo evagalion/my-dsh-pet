@@ -20,8 +20,20 @@
   },
   "sound": {
     "enabled": true,
+    "mode": "voice",
     "volume": 0.35,
     "minGapMs": 6000,
+    "voice": {
+      "name": "Meijia",
+      "rate": 205,
+      "pitch": 90,
+      "lines": {
+        "start": "{agent}开始干活啦~",
+        "done": "这一轮搞定啦，真棒！",
+        "error": "诶呀，好像出错了呢",
+        "waiting": "主人，等你确认一下下~"
+      }
+    },
     "on": {
       "working": "start",
       "success": "done",

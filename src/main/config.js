@@ -23,6 +23,9 @@ function loadConfig() {
     }
     if (typeof raw.clickThrough === 'boolean') cfg.pet.clickThrough = raw.clickThrough
     if (raw.sound && typeof raw.sound.enabled === 'boolean') cfg.sound.enabled = raw.sound.enabled
+    if (raw.sound && (raw.sound.mode === 'voice' || raw.sound.mode === 'tone')) {
+      cfg.sound.mode = raw.sound.mode
+    }
   } catch {
     /* 第一次跑，用默认值 */
   }
@@ -35,7 +38,10 @@ function saveConfig(cfg) {
     const slim = {
       position: cfg.position || null,
       clickThrough: !!cfg.pet.clickThrough,
-      sound: { enabled: !!(cfg.sound && cfg.sound.enabled !== false) },
+      sound: {
+        enabled: !!(cfg.sound && cfg.sound.enabled !== false),
+        mode: (cfg.sound && cfg.sound.mode) === 'tone' ? 'tone' : 'voice',
+      },
     }
     fs.writeFileSync(userConfigPath(), JSON.stringify(slim, null, 2), 'utf8')
   } catch (e) {

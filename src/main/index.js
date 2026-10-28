@@ -230,6 +230,14 @@ function whatOf(s) {
   return t ? String(t).slice(0, 28) : ''
 }
 
+async function soundMenuLabel() {
+  const m = sfx.modeOf(cfg)
+  const v = (cfg.sound && cfg.sound.voice && cfg.sound.voice.name) || 'Meijia'
+  if (m === 'voice') return `提示音：语音（${v}）`
+  if (m === 'tone') return '提示音：音效'
+  return '提示音：关'
+}
+
 async function showMenu() {
   const all = watcher ? await watcher.pollAll() : []
   const statusItems = all.length
@@ -280,15 +288,15 @@ async function showMenu() {
     { type: 'separator' },
     { label: '回到屏幕右下角', click: () => resetPosition() },
     {
-      label: cfg.sound && cfg.sound.enabled === false ? '提示音：关' : '提示音：开',
+      label: soundMenuLabel(),
       click: () => {
-        const on = cfg.sound && cfg.sound.enabled === false
-        cfg.sound.enabled = on
+        // 三态循环：语音 → 音效 → 关
+        const cur = sfx.modeOf(cfg)
+        const next = cur === 'voice' ? 'tone' : cur === 'tone' ? 'off' : 'voice'
+        cfg.sound.enabled = next !== 'off'
+        if (next !== 'off') cfg.sound.mode = next
         saveConfig(cfg)
-        if (on && win) {
-          // 打开时给一声，让用户确认音量合不合适
-          sfx.play(cfg, { phase: 'success', source: 'workbuddy' })
-        }
+        sfx.preview(cfg) // 切完立刻来一句，好确认音色/音量
       },
     },
     {
