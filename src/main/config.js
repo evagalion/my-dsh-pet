@@ -22,6 +22,7 @@ function loadConfig() {
       cfg.position = raw.position
     }
     if (typeof raw.clickThrough === 'boolean') cfg.pet.clickThrough = raw.clickThrough
+    if (raw.sound && typeof raw.sound.enabled === 'boolean') cfg.sound.enabled = raw.sound.enabled
   } catch {
     /* 第一次跑，用默认值 */
   }
@@ -31,7 +32,11 @@ function loadConfig() {
 function saveConfig(cfg) {
   try {
     fs.mkdirSync(path.dirname(userConfigPath()), { recursive: true })
-    const slim = { position: cfg.position || null, clickThrough: !!cfg.pet.clickThrough }
+    const slim = {
+      position: cfg.position || null,
+      clickThrough: !!cfg.pet.clickThrough,
+      sound: { enabled: !!(cfg.sound && cfg.sound.enabled !== false) },
+    }
     fs.writeFileSync(userConfigPath(), JSON.stringify(slim, null, 2), 'utf8')
   } catch (e) {
     console.error('[pet] 保存配置失败', e.message)

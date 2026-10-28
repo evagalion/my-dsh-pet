@@ -18,6 +18,19 @@
     "cursor": { "label": "Cursor", "short": "CU", "color": "#d97706" },
     "codebuddy": { "label": "CodeBuddy", "short": "CB", "color": "#7c3aed" }
   },
+  "sound": {
+    "enabled": true,
+    "volume": 0.35,
+    "minGapMs": 6000,
+    "on": {
+      "working": "start",
+      "success": "done",
+      "error": "error",
+      "waiting": "waiting",
+      "thinking": false,
+      "organizing": false
+    }
+  },
   "weights": {
     "idle": 10,
     "turn": 4,

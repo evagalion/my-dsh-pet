@@ -11,6 +11,7 @@ const { createWatcher } = require('./watcher')
 const { createTray } = require('./tray')
 const { createFlight, step } = require('../shared/physics')
 const { classify, menuGroups } = require('../shared/animations')
+const sfx = require('./sfx')
 
 protocol.registerSchemesAsPrivileged([
   { scheme: 'pet', privileges: { bypassCSP: true, supportFetchAPI: true, stream: true } },
@@ -279,6 +280,18 @@ async function showMenu() {
     { type: 'separator' },
     { label: '回到屏幕右下角', click: () => resetPosition() },
     {
+      label: cfg.sound && cfg.sound.enabled === false ? '提示音：关' : '提示音：开',
+      click: () => {
+        const on = cfg.sound && cfg.sound.enabled === false
+        cfg.sound.enabled = on
+        saveConfig(cfg)
+        if (on && win) {
+          // 打开时给一声，让用户确认音量合不合适
+          sfx.play(cfg, { phase: 'success', source: 'workbuddy' })
+        }
+      },
+    },
+    {
       label: cfg.pet.clickThrough ? '鼠标穿透：开（点不到我）' : '鼠标穿透：关（可以拖我）',
       click: () => {
         cfg.pet.clickThrough = !cfg.pet.clickThrough
@@ -344,6 +357,12 @@ function pushState(s, force) {
     tray.setToolTip(
       `大肥鱼 · ${agentOf(lastKnown.source).label}：${labelOf(lastKnown.phase)}${w ? ' · ' + w : ''}`
     )
+  }
+  // 状态一变就给一声提示音（渲染层不管，直接用系统播放器，窗口没焦点也响）
+  try {
+    sfx.play(cfg, s)
+  } catch {
+    /* 声音不是关键路径，出错也不能影响桌宠 */
   }
   win.webContents.send('pet:state', Object.assign({}, s, { force: !!force }))
 }

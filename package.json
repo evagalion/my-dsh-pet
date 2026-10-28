@@ -10,6 +10,7 @@
     "selftest": "env -u ELECTRON_RUN_AS_NODE electron . --selftest --no-sandbox --disable-gpu",
     "probe": "node scripts/probe.js",
     "icon": "node scripts/make-icon.js",
+    "sfx": "node scripts/make-sfx.js",
     "dist": "CSC_IDENTITY_AUTO_DISCOVERY=false ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/ electron-builder --dir",
     "dist:dmg": "CSC_IDENTITY_AUTO_DISCOVERY=false ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/ electron-builder --mac dmg"
   },

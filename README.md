@@ -80,6 +80,37 @@ npm run icon       # 重新生成托盘图标 assets/tray.png
 
 **右键 → `各 agent 状态`** 会列出三路各自的实时状态（哪个在忙、忙哪个项目/问题），点某一路可以让鱼立刻切过去显示它——不会只看得到「最忙的那个」。
 
+### 提示音
+
+状态一变就响一声，**每个 agent 音色不同**，不用看屏幕也知道是谁在动：
+
+| 事件 | 什么时候响 | 声音 |
+| --- | --- | --- |
+| `start` | 某个 agent 开始干活 | 短促上扬的「叮咚」 |
+| `done` | 一轮跑完（看到结束标记） | 三音上行 |
+| `error` | 出错 | 两音下行 |
+| `waiting` | 真卡在等你确认 | 门铃式两声 |
+
+音色按 agent 区分：**WorkBuddy 620Hz 温和 / Cursor 760Hz 偏亮 / CodeBuddy 500Hz 低沉**（`scripts/make-sfx.js` 里改基频和泛音配比）。
+
+音效是**手写合成的**（基频 + 二次/三次泛音 + 指数衰减包络，直接写 WAV 头），`npm run sfx` 生成 12 个文件共 600KB —— 不引音频库、不用第三方素材，也就没有版权问题。
+
+几个防吵的设计：
+
+- 只在**状态真的变化**时响，「在想 / 收尾」这两个档位默认不响
+- 从「在想」回到「开工」不算新一轮，不重复响
+- 6 秒节流（连续变化只响一次）
+- **刚启动那一下不响**，免得每次开桌宠都「叮」
+- 播放走系统 `afplay`、不经过渲染层：窗口没焦点也响，也不受 Chromium 自动播放策略限制
+
+右键菜单有 **「提示音：开/关」**，状态会记住。音量和事件映射在 `pet.config.json` 的 `sound` 字段里改：
+
+```json
+"sound": { "enabled": true, "volume": 0.35, "minGapMs": 6000,
+  "on": { "working": "start", "success": "done", "error": "error",
+          "waiting": "waiting", "thinking": false, "organizing": false } }
+```
+
 ---
 
 ## 交互
@@ -100,9 +131,12 @@ npm run icon       # 重新生成托盘图标 assets/tray.png
 ```
 ├── assets/
 │   ├── webm/            # 106 段透明动画（52MB，来自 dsh-pet）
-│   └── tray.png         # 托盘图标，scripts/make-icon.js 生成
+│   ├── sfx/             # 12 个提示音（600KB，make-sfx.js 合成）
+│   ├── tray.png         # 托盘图标，scripts/make-icon.js 生成
+│   └── icon.icns        # app 图标
 ├── scripts/
 │   ├── make-icon.js     # 手写 zlib 生成 PNG，不引图形库
+│   ├── make-sfx.js      # 手写 WAV 合成提示音，不引音频库
 │   └── probe.js         # 探测层命令行验证
 └── src/
     ├── shared/
@@ -111,6 +145,7 @@ npm run icon       # 重新生成托盘图标 assets/tray.png
     │   └── animations.js     # 素材分类（主进程和渲染层共用，菜单和动画链同一套）
     ├── main/
     │   ├── index.js          # 窗口、自定义 pet:// 协议、右键菜单、飞行
+    │   ├── sfx.js            # 提示音：状态变化 → 系统 afplay 播一段
     │   ├── tray.js
     │   ├── config.js         # 配置读写（存到 app userData）
     │   └── watcher/          # 三个探测源 → 聚合成一个状态
