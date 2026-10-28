@@ -230,7 +230,9 @@ function whatOf(s) {
   return t ? String(t).slice(0, 28) : ''
 }
 
-async function soundMenuLabel() {
+// 注意：这里必须是同步函数。菜单 label 需要字符串，
+// 一旦写成 async 返回的就是 Promise，Electron 构建菜单时会直接抛类型转换错误，整个菜单弹不出来。
+function soundMenuLabel() {
   const m = sfx.modeOf(cfg)
   const v = (cfg.sound && cfg.sound.voice && cfg.sound.voice.name) || 'Meijia'
   if (m === 'voice') return `提示音：语音（${v}）`
@@ -238,8 +240,17 @@ async function soundMenuLabel() {
   return '提示音：关'
 }
 
-async function showMenu() {
-  const all = watcher ? await watcher.pollAll() : []
+// 菜单要等三路探测结果，但绝不能被探测卡住：超时就当"都没在跑"，先把菜单弹出来
+async function pollAllSafe() {
+  if (!watcher) return []
+  const guard = new Promise((r) => setTimeout(() => r(null), 1500))
+  const r = await Promise.race([watcher.pollAll().catch(() => null), guard])
+  return r || []
+}
+
+// 只负责拼模板（自检也复用），不弹窗
+async function buildMenuTemplate() {
+  const all = await pollAllSafe()
   const statusItems = all.length
     ? all.map((a) => {
         const ag = agentOf(a.source)
@@ -252,7 +263,7 @@ async function showMenu() {
       })
     : [{ label: '都没在跑，一起摸鱼中~', enabled: false }]
 
-  const t = Menu.buildFromTemplate([
+  return Menu.buildFromTemplate([
     {
       label: `现在：${labelOf(lastKnown.phase)} · ${agentOf(lastKnown.source).label}${
         whatOf(lastKnown) ? ' · ' + whatOf(lastKnown) : ''
@@ -318,6 +329,22 @@ async function showMenu() {
     { type: 'separator' },
     { label: '退出', click: () => app.quit() },
   ])
+}
+
+async function showMenu() {
+  let t
+  try {
+    t = await buildMenuTemplate()
+  } catch (e) {
+    // 兜底：宁可弹个精简菜单，也不要点了右键毫无反应
+    console.error('[pet] 完整菜单构建失败，降级为精简菜单：', e)
+    t = Menu.buildFromTemplate([
+      { label: '摸一下', click: () => win.webContents.send('pet:poke') },
+      { label: '回到屏幕右下角', click: () => resetPosition() },
+      { type: 'separator' },
+      { label: '退出', click: () => app.quit() },
+    ])
+  }
   t.popup({ window: win })
 }
 
@@ -418,7 +445,27 @@ app.whenReady().then(() => {
   })
 
   ipcMain.on('pet:walk', (_e, dist, ms) => startWalk(Number(dist) || 0, Number(ms) || 2600))
-  ipcMain.on('pet:selftest', (_e, data) => selftestDone(data))
+  // 右键菜单曾因 label 传了 Promise 而整体弹不出来，且异常被静默吞掉。
+  // 自检收尾前先真实构建一次菜单模板，把这类回归挡在提交之前。
+  ipcMain.on('pet:selftest', (_e, data) => {
+    if (!SELFTEST) return
+    const finish = (extra) => selftestDone(Object.assign({}, data, extra))
+    const guard = new Promise((r) => setTimeout(() => r({ timeout: true }), 8000))
+    Promise.race([buildMenuTemplate(), guard])
+      .then((tpl) => {
+        if (!tpl || !tpl.items) return finish({ menuBuilt: false, menuError: '菜单构建超时/无结果' })
+        const bad = []
+        const walk = (items) => {
+          for (const it of items || []) {
+            if (it.label != null && typeof it.label !== 'string') bad.push(String(it.label))
+            walk(it.submenu && it.submenu.items)
+          }
+        }
+        walk(tpl.items)
+        finish({ menuBuilt: true, menuItems: tpl.items.length, menuBadLabels: bad })
+      })
+      .catch((e) => finish({ menuBuilt: false, menuError: String((e && e.message) || e).slice(0, 400) }))
+  })
   ipcMain.on('pet:debug', (_e, data) => {
     if (!process.argv.includes('--inputlog')) return
     try {
@@ -434,7 +481,7 @@ app.whenReady().then(() => {
     if (!win) return
     Promise.resolve()
       .then(() => showMenu())
-      .catch(() => {})
+      .catch((e) => console.error('[pet] 右键菜单构建失败：', e))
   })
   ipcMain.on('pet:quit', () => app.quit())
 
