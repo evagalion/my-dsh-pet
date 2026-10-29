@@ -27,17 +27,16 @@
     "volume": 0.35,
     "minGapMs": 6000,
     "voice": {
-      "engine": "kokoro",
+      "engine": "edge",
       "name": "Meijia",
       "rate": 205,
       "pitch": 90,
-      "kokoro": {
-        "label": "Kokoro#3",
-        "sid": 3,
-        "speed": 1,
-        "numThreads": 2,
-        "dir": "assets/tts/kokoro-multi-lang-v1_1",
-        "bin": "assets/tts/sherpa-onnx-v2.0.1-osx-arm64-shared/bin/sherpa-onnx-offline-tts"
+      "edge": {
+        "label": "晓伊",
+        "voice": "zh-CN-XiaoyiNeural",
+        "rate": "+10%",
+        "pitch": "+10Hz",
+        "python": "/Users/danghaoyu/.workbuddy/binaries/python/versions/3.13.12/bin/python3"
       },
       "lines": {
         "start": "{agent}开始干活啦~",

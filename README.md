@@ -121,16 +121,31 @@ AskUserQuestion → 问你      Skill → 用技能       show_widget → 画图
 
 音色按 agent 区分：**WorkBuddy 620Hz 温和 / Cursor 760Hz 偏亮 / CodeBuddy 500Hz 低沉**（`scripts/make-sfx.js` 里改基频和泛音配比）。
 
-**语音模式**（默认）用 macOS 自带的 `say`，不装任何东西：
+**语音模式**（默认）走两级回退链，哪档能用就用哪档：
+
+| 引擎 | 音质 | 联网 | 依赖 |
+| --- | --- | --- | --- |
+| `edge`（默认） | 好，微软神经网络音色 | **首次需要**，之后永久离线 | `python3 -m pip install edge-tts`（几 MB） |
+| `say` | 一般，机械味 | 不需要 | macOS 自带，零依赖 |
+
+> 关键设计：台词一共就 6 句（4 个事件 × 3 个 agent 名），**首次联网合成完就缓存到 `~/Library/Caches/dafeiyu-tts/`**，之后完全离线播放。断网且没缓存时才退回系统 `say`。
+
+> 曾经还接了一档本地离线神经 TTS（sherpa-onnx + Kokoro / Theresa / MeloTTS），但音质明显不如 Edge，
+> 且模型要 1.4GB，已移除。`sfx.js` 里 `kokoro` / `vits` 引擎的代码还留着，想接回来的话
+> 把模型放进 `assets/tts/` 并在 `sound.voice` 里加回对应的 `tts` 配置块即可。
+
+**Edge 引擎配置**（`sound.voice.edge`）：
 
 | 配置项 | 默认 | 说明 |
 | --- | --- | --- |
-| `voice.name` | `Meijia` | 音色。系统里可选：`Meijia`（美佳，最甜最年轻，推荐）、`Tingting`（婷婷，字正腔圆的大陆普通话）、`Sinji`（粤语）、`Sandy` / `Shelley` / `Flo` 等。想看全量列表：`say -v '?' \| grep zh_` |
-| `voice.rate` | `205` | 语速（字/分钟），调小更慢更软 |
-| `voice.pitch` | `90` | **音调抬高的量**，越大越稚嫩 —— 萝莉感主要靠它（实测 `[[pbas +90]]` 让过零率从 4145Hz 升到 4956Hz，音调确实抬上去了） |
-| `voice.lines` | 见下 | 台词，`{agent}` 换成 agent 名、`{what}` 换成正在处理的问题 |
+| `edge.voice` | `zh-CN-XiaoyiNeural` | 音色。晓伊（活泼）/ 晓晓（温柔）/ 晓北（东北）/ 晓妮（陕西） |
+| `edge.rate` | `+10%` | 语速。萝莉感靠「稍快 + 稍高」，`+15%` 更明显 |
+| `edge.pitch` | `+10Hz` | 音调偏移，`+20Hz` 更稚嫩 |
+| `edge.python` | 绝对路径 | 装了 `edge-tts` 的 python。**打包版从 Finder 启动时 PATH 很窄，必须写绝对路径**；找不到会自动探测 PATH / homebrew / `/usr/bin` |
 
-默认台词：
+换音色：**右键 → 挑语音音色…** 打开试听页，点播放试听，满意后点「复制配置」贴进 `pet.config.json`。换完跑一次 `node scripts/warm-voice.js` 把新音色的台词重新缓存一遍（加 `--force` 强制重录）。
+
+默认台词（`{agent}` 换成 agent 名、`{what}` 换成正在处理的问题）：
 
 ```json
 "lines": {
@@ -140,8 +155,6 @@ AskUserQuestion → 问你      Skill → 用技能       show_widget → 画图
   "waiting": "主人，等你确认一下下~"
 }
 ```
-
-> 想要更可爱：把 `pitch` 调到 110~130、`rate` 调到 190；想要正经一点：换 `Tingting` 并把 `pitch` 降到 30。系统设置 → 辅助功能 → 朗读内容 → 声音 里还能下载更多中文音色（比如下了 `Tianyi` 之类的高级音色，直接填进 `voice.name` 即可）。
 
 **音效模式**是手写合成的（基频 + 二次/三次泛音 + 指数衰减包络，直接写 WAV 头），`npm run sfx` 生成 12 个文件共 600KB —— 不引音频库、不用第三方素材，也就没有版权问题。语音不可用时（比如非 macOS）会自动退回音效。
 
@@ -157,7 +170,11 @@ AskUserQuestion → 问你      Skill → 用技能       show_widget → 画图
 
 ```json
 "sound": { "enabled": true, "mode": "voice", "volume": 0.35, "minGapMs": 6000,
-  "voice": { "name": "Meijia", "rate": 205, "pitch": 90, "lines": { ... } },
+  "voice": {
+    "engine": "edge",
+    "edge": { "voice": "zh-CN-XiaoyiNeural", "rate": "+10%", "pitch": "+10Hz" },
+    "lines": { ... }
+  },
   "on": { "working": "start", "success": "done", "error": "error",
           "waiting": "waiting", "thinking": false, "organizing": false } }
 ```
@@ -183,11 +200,13 @@ AskUserQuestion → 问你      Skill → 用技能       show_widget → 画图
 ├── assets/
 │   ├── webm/            # 106 段透明动画（52MB，来自 dsh-pet）
 │   ├── sfx/             # 12 个提示音（600KB，make-sfx.js 合成）
+│   ├── tts/             # edge-audition.html 试听页 + 9 个音色样本（400KB）
 │   ├── tray.png         # 托盘图标，scripts/make-icon.js 生成
 │   └── icon.icns        # app 图标
 ├── scripts/
 │   ├── make-icon.js     # 手写 zlib 生成 PNG，不引图形库
 │   ├── make-sfx.js      # 手写 WAV 合成提示音，不引音频库
+│   ├── warm-voice.js    # 预热语音缓存，让播报永久离线
 │   └── probe.js         # 探测层命令行验证
 └── src/
     ├── shared/
@@ -196,7 +215,7 @@ AskUserQuestion → 问你      Skill → 用技能       show_widget → 画图
     │   └── animations.js     # 素材分类（主进程和渲染层共用，菜单和动画链同一套）
     ├── main/
     │   ├── index.js          # 窗口、自定义 pet:// 协议、右键菜单、飞行
-    │   ├── sfx.js            # 提示音：状态变化 → 系统 afplay 播一段
+    │   ├── sfx.js            # 提示音：状态变化 → edge/say 回退，afplay 播一段
     │   ├── tray.js
     │   ├── config.js         # 配置读写（存到 app userData）
     │   └── watcher/          # 三个探测源 → 聚合成一个状态

@@ -333,7 +333,7 @@ async function buildMenuTemplate() {
     ...(sfx.auditionPath()
       ? [
           {
-            label: '挑语音音色…（55 个中文女声试听）',
+            label: '挑语音音色…（试听并复制配置）',
             click: () => shell.openPath(sfx.auditionPath()),
           },
         ]
@@ -351,6 +351,7 @@ async function buildMenuTemplate() {
       click: () => {
         const assets = listAssets()
         pools = classify(assets, cfg)
+        sfx.resetEdgeProbe() // python 路径可能刚装好，重新探测一次
         win.webContents.send('pet:reload-config', { config: cfg, pools })
       },
     },
@@ -435,6 +436,7 @@ function pushState(s, force) {
 
 app.whenReady().then(() => {
   cfg = loadConfig()
+  sfx.warmup(cfg) // 异步探一次 python，别等到第一次播报才同步阻塞
 
   protocol.handle('pet', async (req) => {
     try {

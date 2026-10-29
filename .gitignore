@@ -7,5 +7,9 @@ dist/
 # AI 会话笔记，不属于交付物
 .workbuddy/
 
-# TTS 语音包（sherpa-onnx 二进制 + Kokoro 模型 + 试听样本，体积大，不入库）
-assets/tts/
+# TTS：本地离线语音包（sherpa-onnx 二进制 + Kokoro/Theresa/Melo 模型）
+# 体积 1.4GB，不入库。默认引擎是 Edge（在线合成 + 本地缓存），不需要这些。
+assets/tts/*
+# 例外：Edge 试听页 + 小样本（共 400KB），方便换音色时直接试听
+!assets/tts/edge-audition.html
+!assets/tts/samples-edge

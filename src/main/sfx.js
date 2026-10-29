@@ -1,10 +1,12 @@
 'use strict'
 
 // 提示音 / 提示语音：状态一变就播一下。
-//   voice 模式 —— 念台词。引擎二选一：
-//       kokoro：本地神经网络 TTS（sherpa-onnx + Kokoro-82M v1.1-zh），自然得多，
-//               55 个中文女声可选，首次合成约 1~2 秒，之后走缓存秒播
-//       say   ：macOS 系统 TTS + 提高音调（机械味重，作为兜底）
+//   voice 模式 —— 念台词。引擎按优先级回退：
+//       edge  ：Edge 神经网络 TTS（微软在线音色，音质最好）。首次联网合成后
+//               缓存到本地，之后完全离线播放；断网时自动回退下一档
+//       kokoro：本地神经网络 TTS（sherpa-onnx + Kokoro-82M v1.1-zh），纯离线
+//       vits  ：sherpa-onnx 的 VITS 系本地模型（MeloTTS / Theresa…），纯离线
+//       say   ：macOS 系统 TTS + 提高音调（机械味重，最后兜底）
 //   tone  模式 —— assets/sfx/<agent>-<event>.wav 合成音
 // 全部走系统进程，不经过渲染层：窗口没焦点也响，也不受 Chromium 自动播放限制
 // （渲染层用 AudioContext 的话，没有用户手势会被挂起，桌宠恰好是无人值守的）。
@@ -13,7 +15,7 @@ const fs = require('node:fs')
 const path = require('node:path')
 const os = require('node:os')
 const crypto = require('node:crypto')
-const { execFile } = require('node:child_process')
+const { execFile, spawnSync } = require('node:child_process')
 const { ASSETS_DIR, ROOT } = require('./paths')
 
 const IS_MAC = os.platform() === 'darwin'
@@ -43,56 +45,210 @@ function voiceCfg(cfg) {
   return ((cfg && cfg.sound && cfg.sound.voice) || {})
 }
 
+// engine: edge | kokoro | vits | say
+//   edge —— 在线神经网络，音质最好，台词缓存后可离线播放
+//   kokoro / vits —— 本地离线神经网络（vits 泛指 sherpa-onnx 的 VITS 系模型：MeloTTS / Theresa…）
 function engineOf(cfg) {
-  return voiceCfg(cfg).engine === 'kokoro' ? 'kokoro' : 'say'
+  const e = String(voiceCfg(cfg).engine || '')
+  return e === 'edge' || e === 'kokoro' || e === 'vits' ? e : 'say'
 }
 
-// 解析出 kokoro 的二进制与模型路径；缺任何一个就返回 ok:false，上层自动退回 say
+// ---- Edge 在线神经 TTS ----
+
+// 打包版从 Finder 启动时 PATH 很窄，所以配置里写死绝对路径；找不到再逐个探测
+function edgeCandidates(cfg) {
+  return [
+    (voiceCfg(cfg).edge || {}).python,
+    'python3',
+    '/opt/homebrew/bin/python3',
+    '/usr/local/bin/python3',
+    '/usr/bin/python3',
+  ].filter(Boolean)
+}
+
+let edgePyCache = null // null=还没探测 ''=探测过但没有可用的
+function edgePython(cfg) {
+  if (edgePyCache != null) return edgePyCache
+  for (const py of edgeCandidates(cfg)) {
+    try {
+      const r = spawnSync(py, ['-c', 'import edge_tts'], { timeout: 15000 })
+      if (r.status === 0) {
+        edgePyCache = py
+        return py
+      }
+    } catch (e) {
+      /* 这个候选不可用，换下一个 */
+    }
+  }
+  edgePyCache = ''
+  return ''
+}
+
+// 探测结果会被缓存，改了配置（换 python 路径）要能重来
+function resetEdgeProbe() {
+  edgePyCache = null
+}
+
+// 启动时异步预热探测，免得第一次播报时同步 spawn 卡住主线程（动画会顿半秒）。
+// 用的是异步 execFile，探测过程不阻塞
+function warmup(cfg) {
+  if (engineOf(cfg) !== 'edge' || edgePyCache != null) return
+  const cands = edgeCandidates(cfg)
+  const tryNext = (i) => {
+    if (i >= cands.length) {
+      edgePyCache = ''
+      return
+    }
+    const py = cands[i]
+    execFile(py, ['-c', 'import edge_tts'], { timeout: 15000 }, (err) => {
+      if (!err) {
+        edgePyCache = py
+        return
+      }
+      tryNext(i + 1)
+    })
+  }
+  tryNext(0)
+}
+
+function edgeAvailable(cfg) {
+  return engineOf(cfg) === 'edge' && !!edgePython(cfg)
+}
+
+// 一行内联脚本，避免打包时漏拷 scripts/ 下的 py 文件
+const EDGE_CODE = [
+  'import sys, asyncio, edge_tts',
+  'async def go():',
+  '    await edge_tts.Communicate(sys.argv[4], sys.argv[1], rate=sys.argv[2], pitch=sys.argv[3]).save(sys.argv[5])',
+  'asyncio.run(go())',
+].join('\n')
+
+function edgeSpeak(cfg, text, force, onFail) {
+  const py = edgePython(cfg)
+  if (!py) return false
+  if (!force && Date.now() - lastAt < gapOf(cfg)) return false
+  lastAt = Date.now()
+
+  const e = voiceCfg(cfg).edge || {}
+  const voice = e.voice || 'zh-CN-XiaoyiNeural'
+  const rate = e.rate || '+10%'
+  const pitch = e.pitch || '+10Hz'
+
+  const key = crypto
+    .createHash('md5')
+    .update(`${voice}|${rate}|${pitch}|${text}`)
+    .digest('hex')
+    .slice(0, 16)
+  const out = path.join(ttsCacheDir(), `edge-${key}.mp3`)
+  const vol = String(volOf(cfg))
+
+  const playOut = (f) => execFile('afplay', ['-v', vol, f], { timeout: 20000 }, () => {})
+  if (fs.existsSync(out) && fs.statSync(out).size > 1024) {
+    playOut(out)
+    return true
+  }
+
+  execFile(
+    py,
+    ['-c', EDGE_CODE, voice, rate, pitch, text, out],
+    { timeout: 30000 },
+    (err) => {
+      if (err || !fs.existsSync(out) || fs.statSync(out).size <= 1024) {
+        console.error('[pet] Edge 合成失败（多半是没网），回退下一档引擎：', (err && err.message) || '没有输出文件')
+        if (typeof onFail === 'function') onFail()
+        return
+      }
+      playOut(out)
+    }
+  )
+  return true
+}
+
+// 解析出二进制与模型路径；缺任何一个就返回 ok:false，上层自动退回 say
 function kokoroPaths(cfg) {
-  const k = voiceCfg(cfg).kokoro || {}
+  const v = voiceCfg(cfg)
+  const k = v.tts || v.kokoro || {}
   const dir = k.dir ? path.resolve(ROOT, k.dir) : path.join(ASSETS_DIR, 'tts', 'kokoro-multi-lang-v1_1')
   const bin = k.bin
     ? path.resolve(ROOT, k.bin)
     : path.join(ASSETS_DIR, 'tts', 'sherpa-onnx-v2.0.1-osx-arm64-shared', 'bin', 'sherpa-onnx-offline-tts')
-  const ok =
-    fs.existsSync(bin) &&
-    fs.existsSync(path.join(dir, 'model.onnx')) &&
-    fs.existsSync(path.join(dir, 'voices.bin')) &&
-    fs.existsSync(path.join(dir, 'tokens.txt'))
+
+  // 不写 kind 就从目录名猜：带 kokoro 走 kokoro 参数，其余走 vits 参数
+  const kind = k.kind || (/kokoro/i.test(dir) ? 'kokoro' : 'vits')
+  const model = k.model || 'model.onnx'
+  const sid = k.sid == null ? 0 : k.sid
+
+  const need =
+    kind === 'kokoro'
+      ? ['model.onnx', 'voices.bin', 'tokens.txt']
+      : [model, 'tokens.txt', 'lexicon.txt']
+  const ok = !!bin && fs.existsSync(bin) && need.every((f) => fs.existsSync(path.join(dir, f)))
+
   return {
     ok,
+    kind,
     bin,
     dir,
-    sid: k.sid == null ? 3 : k.sid,
+    model,
+    sid,
     speed: k.speed == null ? 1 : k.speed,
     threads: k.numThreads == null ? 2 : k.numThreads,
-    label: k.label || `Kokoro#${k.sid == null ? 3 : k.sid}`,
+    label: k.label || `${path.basename(dir)}#${sid}`,
   }
 }
 
 function kokoroAvailable(cfg) {
-  return engineOf(cfg) === 'kokoro' && kokoroPaths(cfg).ok
+  const e = engineOf(cfg)
+  return (e === 'kokoro' || e === 'vits') && kokoroPaths(cfg).ok
 }
 
+// 两类模型参数不一样：kokoro 要 voices.bin + espeak-ng-data，vits 要 lexicon
 function kokoroArgs(p, text, out) {
-  return [
-    `--kokoro-model=${path.join(p.dir, 'model.onnx')}`,
-    `--kokoro-voices=${path.join(p.dir, 'voices.bin')}`,
-    `--kokoro-tokens=${path.join(p.dir, 'tokens.txt')}`,
-    `--kokoro-data-dir=${path.join(p.dir, 'espeak-ng-data')}`,
-    `--kokoro-lexicon=${path.join(p.dir, 'lexicon-us-en.txt')},${path.join(p.dir, 'lexicon-zh.txt')}`,
-    `--tts-rule-fsts=${path.join(p.dir, 'date-zh.fst')},${path.join(p.dir, 'number-zh.fst')}`,
+  const common = [
     `--num-threads=${p.threads}`,
     `--sid=${p.sid}`,
     `--speed=${p.speed}`,
     `--output-filename=${out}`,
     text,
   ]
+  if (p.kind === 'kokoro') {
+    return [
+      `--kokoro-model=${path.join(p.dir, 'model.onnx')}`,
+      `--kokoro-voices=${path.join(p.dir, 'voices.bin')}`,
+      `--kokoro-tokens=${path.join(p.dir, 'tokens.txt')}`,
+      `--kokoro-data-dir=${path.join(p.dir, 'espeak-ng-data')}`,
+      `--kokoro-lexicon=${path.join(p.dir, 'lexicon-us-en.txt')},${path.join(p.dir, 'lexicon-zh.txt')}`,
+      `--tts-rule-fsts=${path.join(p.dir, 'date-zh.fst')},${path.join(p.dir, 'number-zh.fst')}`,
+      ...common,
+    ]
+  }
+  const args = [
+    `--vits-model=${path.join(p.dir, p.model)}`,
+    `--vits-tokens=${path.join(p.dir, 'tokens.txt')}`,
+    `--vits-lexicon=${path.join(p.dir, 'lexicon.txt')}`,
+  ]
+  const fsts = [path.join(p.dir, 'date.fst'), path.join(p.dir, 'number.fst')].filter((f) =>
+    fs.existsSync(f)
+  )
+  if (fsts.length) args.push(`--tts-rule-fsts=${fsts.join(',')}`)
+  return args.concat(common)
 }
 
-// 台词就那几句，合成一次缓存起来，之后就是秒播（否则每次都要等 1~2 秒才出声）
+// 台词就那几句，合成一次缓存起来，之后就是秒播（否则每次都要等 1~2 秒才出声）。
+// 放 Caches 而不是 tmpdir：重启后缓存还在，等于合成过一次就永久离线可用。
 function ttsCacheDir() {
-  return path.join(os.tmpdir(), 'dafeiyu-tts')
+  const cands = IS_MAC
+    ? [path.join(os.homedir(), 'Library', 'Caches', 'dafeiyu-tts'), path.join(os.tmpdir(), 'dafeiyu-tts')]
+    : [path.join(os.tmpdir(), 'dafeiyu-tts')]
+  for (const d of cands) {
+    try {
+      fs.mkdirSync(d, { recursive: true })
+      return d
+    } catch (e) {
+      /* 这个目录建不了就换下一个 */
+    }
+  }
+  return os.tmpdir()
 }
 
 function speakKokoro(cfg, text, force) {
@@ -155,16 +311,29 @@ function renderLine(tpl, cfg, s) {
     .trim()
 }
 
+// 回退链：edge（在线，音质最好）→ kokoro/vits（本地离线）→ say（系统兜底）
 function speak(cfg, s, event, force) {
   const v = voiceCfg(cfg)
   const text = renderLine((v.lines || {})[event], cfg, s)
   if (!text) return false
 
-  if (engineOf(cfg) === 'kokoro' && speakKokoro(cfg, text, force)) return true
+  const engine = engineOf(cfg)
+  if (engine === 'edge' && edgeAvailable(cfg)) {
+    if (edgeSpeak(cfg, text, force, () => localSpeak(cfg, text, true))) return true
+  }
+  if (engine !== 'say' && speakKokoro(cfg, text, force)) return true
 
   if (!canSpeak()) return false
   if (!force && Date.now() - lastAt < gapOf(cfg)) return false
   lastAt = Date.now()
+  return sayFallback(cfg, text)
+}
+
+// Edge 用不了时的本地兜底：先本地神经 TTS，再系统 say。force=true 跳过节流，
+// 因为这是被上层判定"该说一句"之后的回退，不是重复触发
+function localSpeak(cfg, text, force) {
+  if (speakKokoro(cfg, text, force)) return true
+  if (!canSpeak()) return false
   return sayFallback(cfg, text)
 }
 
@@ -221,7 +390,9 @@ function play(cfg, s) {
   // working 只认"新一轮"，thinking/organizing 之间来回切不响
   if (s.phase === 'working' && !FRESH_START.has(prev)) return false
 
-  if (mode === 'voice' && (kokoroAvailable(cfg) || canSpeak())) return speak(cfg, s, event)
+  if (mode === 'voice' && (edgeAvailable(cfg) || kokoroAvailable(cfg) || canSpeak())) {
+    return speak(cfg, s, event)
+  }
   return tone(cfg, s.source || 'workbuddy', event) // 语音不可用就退回音效
 }
 
@@ -230,23 +401,44 @@ function preview(cfg) {
   const mode = modeOf(cfg)
   if (mode === 'off') return false
   const sample = { source: 'workbuddy', phase: 'success' }
-  if (mode === 'voice' && (kokoroAvailable(cfg) || canSpeak())) return speak(cfg, sample, 'done', true)
+  if (mode === 'voice' && (edgeAvailable(cfg) || kokoroAvailable(cfg) || canSpeak())) {
+    return speak(cfg, sample, 'done', true)
+  }
   return tone(cfg, 'workbuddy', 'done', true)
 }
 
 // 菜单上显示当前走的是哪个引擎
 function voiceLabel(cfg) {
-  if (engineOf(cfg) === 'kokoro') {
+  const e = engineOf(cfg)
+  if (e === 'edge') {
+    const ed = voiceCfg(cfg).edge || {}
+    const label = ed.label || String(ed.voice || '').replace(/^zh-CN-/, '').replace('Neural', '')
+    return edgeAvailable(cfg) ? `Edge·${label}` : `Edge·${label}（没装 edge-tts，已退回本地）`
+  }
+  if (e !== 'say') {
     const p = kokoroPaths(cfg)
     return p.ok ? p.label : `${p.label}（缺文件，已退回系统语音）`
   }
   return voiceCfg(cfg).name || 'Meijia'
 }
 
-// 试听页路径（挑音色用），不存在返回 null
+// 试听页路径（挑音色用），不存在返回 null。优先 Edge 那页
 function auditionPath() {
+  const edge = path.join(ASSETS_DIR, 'tts', 'edge-audition.html')
+  if (fs.existsSync(edge)) return edge
   const p = path.join(ASSETS_DIR, 'tts', 'audition.html')
   return fs.existsSync(p) ? p : null
 }
 
-module.exports = { play, preview, modeOf, voiceLabel, auditionPath, kokoroAvailable }
+module.exports = {
+  play,
+  preview,
+  modeOf,
+  voiceLabel,
+  auditionPath,
+  engineOf,
+  kokoroAvailable,
+  edgeAvailable,
+  resetEdgeProbe,
+  warmup,
+}
