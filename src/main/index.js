@@ -14,6 +14,10 @@ const { classify, menuGroups } = require('../shared/animations')
 const sfx = require('./sfx')
 const feed = require('./feed')
 const mood = require('./mood')
+const calendar = require('./calendar')
+const routine = require('./routine')
+const coins = require('./coins')
+const digest = require('./digest')
 
 const pick = (arr) => (arr && arr.length ? arr[Math.floor(Math.random() * arr.length)] : null)
 
@@ -248,6 +252,40 @@ function soundMenuLabel() {
   return '提示音：关'
 }
 
+// 小金库：显示余额，点一下播对应档位的「余额-」动画
+function coinsMenuItems() {
+  const s = coins.snapshot(cfg)
+  if (!s.enabled) return []
+  const label = s.tier ? `小金库：${s.total} 枚（${s.tier.label}）` : `小金库：${s.total} 枚`
+  return [
+    {
+      label,
+      click: () => {
+        const t = coins.snapshot(cfg).tier
+        if (t && t.anim) win.webContents.send('pet:play', t.anim)
+      },
+    },
+  ]
+}
+
+// 每日回顾：点一下念一句今天的战报
+function digestMenuItems() {
+  const t = digest.today(cfg)
+  if (!t) return []
+  return [
+    {
+      label: `今天干了啥（${t.n} 轮 · 成 ${t.ok}）`,
+      click: () => sayDigest(),
+    },
+  ]
+}
+
+function sayDigest() {
+  const line = digest.line(cfg)
+  sfx.speakText(cfg, line, true)
+  if (win) win.webContents.send('pet:digest', { line })
+}
+
 // 心情 / 亲密度：只在菜单里显示，点不动。关掉时返回空数组被展开运算符吃掉
 function moodMenuItems() {
   const s = mood.snapshot(cfg)
@@ -347,6 +385,8 @@ async function buildMenuTemplate() {
     { type: 'separator' },
     { label: '摸一下', click: () => win.webContents.send('pet:poke') },
     ...feedMenuItems(),
+    ...coinsMenuItems(),
+    ...digestMenuItems(),
     ...moodMenuItems(),
     actionMenu(),
     { label: '它在干嘛？', click: () => speakNow() },
@@ -522,6 +562,23 @@ function applyMood(all) {
   }
 }
 
+// 作息动画：早上刷牙 / 深夜打瞌睡 / 久坐伸懒腰
+function applyRoutine(all, now) {
+  if (!win || win.isDestroyed()) return
+  const r = routine.watch(cfg, all, now)
+  if (r) win.webContents.send('pet:routine', r)
+}
+
+// 今天过不过节。一天只会变一次，所以按日期缓存，变了才推给渲染层
+let occasionDay = ''
+function applyOccasion(now) {
+  const key = new Date(now).toDateString()
+  if (key === occasionDay) return
+  occasionDay = key
+  if (!win || win.isDestroyed()) return
+  win.webContents.send('pet:occasion', calendar.occasionOf(cfg, new Date(now)))
+}
+
 function pushState(s, force) {
   lastKnown = {
     phase: s.phase,
@@ -550,7 +607,19 @@ function pushState(s, force) {
   }
   // 成功/失败各记一笔流水，攒出心情（同一次结果只记一次，重复推送不会刷分）
   try {
-    mood.note(cfg, s.phase)
+    if (mood.note(cfg, s.phase)) {
+      // 同一次结果喂给三个账本：心情（最近 30 分钟）、小金库（累计）、每日回顾（按天）
+      const c = coins.note(cfg, s.phase)
+      if (c && c.gift) {
+        const cs = cfg.coins || {}
+        win.webContents.send('pet:gift', {
+          anim: pick(cs.giftAnims) || '拆礼物',
+          line: pick(((cs.lines) || {}).gift) || '',
+          total: c.total,
+        })
+      }
+      digest.note(cfg, s.phase, s.project || s.title)
+    }
     pushMood()
   } catch {
     /* 心情不是关键路径 */
@@ -585,6 +654,9 @@ app.whenReady().then(() => {
       root: ROOT,
       fullness: feed.fullness(cfg),
       mood: mood.snapshot(cfg),
+      occasion: calendar.occasionOf(cfg),
+      coins: coins.snapshot(cfg),
+      digest: digest.today(cfg),
       selftest: SELFTEST,
     }
   })
@@ -678,8 +750,17 @@ app.whenReady().then(() => {
       moodAt = now
       Promise.resolve()
         .then(() => watcher.pollAll())
-        .then((all) => applyMood(all))
+        .then((all) => {
+          applyMood(all)
+          applyRoutine(all, now)
+          applyOccasion(now)
+        })
         .catch(() => {})
+    }
+    // 下班小结：到点了念一句，一天一次
+    if (digest.shouldFire(cfg, now)) {
+      digest.markFired(cfg, now)
+      sayDigest()
     }
   }
   tick()

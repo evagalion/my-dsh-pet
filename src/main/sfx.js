@@ -453,6 +453,24 @@ function play(cfg, s) {
   return tone(cfg, s.source || 'workbuddy', event) // 语音不可用就退回音效
 }
 
+// 念任意一句话：每日回顾、拆礼物这类台词不在 lines 表里，是自由文本。
+// 复用 speak 的回退链（edge → 本地神经 → 系统 say），语音关掉就什么都不做
+function speakText(cfg, text, force) {
+  const mode = modeOf(cfg)
+  if (mode === 'off' || mode === 'tone' || !text) return false
+  if (!(edgeAvailable(cfg) || kokoroAvailable(cfg) || canSpeak())) return false
+
+  const engine = engineOf(cfg)
+  if (engine === 'edge' && edgeAvailable(cfg)) {
+    if (edgeSpeak(cfg, text, force, () => localSpeak(cfg, text, true))) return true
+  }
+  if (engine !== 'say' && speakKokoro(cfg, text, force)) return true
+  if (!canSpeak()) return false
+  if (!force && Date.now() - lastAt < gapOf(cfg)) return false
+  lastAt = Date.now()
+  return sayFallback(cfg, text)
+}
+
 // 菜单里切换模式后立刻来一句，让用户听效果（跳过节流和状态机）
 function preview(cfg) {
   const mode = modeOf(cfg)
@@ -490,6 +508,7 @@ function auditionPath() {
 module.exports = {
   play,
   preview,
+  speakText,
   modeOf,
   voiceLabel,
   auditionPath,

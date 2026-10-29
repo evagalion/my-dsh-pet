@@ -54,12 +54,14 @@ function cfgOf(cfg, key) {
 
 let lastPhase = '' // 同一次结果只记一次，别因为重复推送把失败数刷上去
 
+// 返回 true 表示真的新记了一笔。小金库和每日回顾都挂在这同一次去重上，
+// 不去重的话每秒一次的状态推送会把钱和轮次都刷爆
 function note(cfg, phase) {
   if (phase !== 'success' && phase !== 'error') {
     lastPhase = phase
-    return
+    return false
   }
-  if (phase === lastPhase) return
+  if (phase === lastPhase) return false
   lastPhase = phase
 
   const s = load()
@@ -69,6 +71,7 @@ function note(cfg, phase) {
   s.outcomes.push({ t: now, kind: phase })
   if (s.outcomes.length > 200) s.outcomes = s.outcomes.slice(-200)
   save()
+  return true
 }
 
 // 末尾连续失败了几次（中间夹了成功就断）

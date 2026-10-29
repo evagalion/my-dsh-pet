@@ -29,8 +29,12 @@
   let moodSnap = { enabled: true, mood: 'calm', sulking: false, bond: null, level: null }
   let holdLine = '' // 「卡太久」这类提醒要在几秒内压住状态机的台词，不然下一秒就被冲掉
   let holdUntil = 0
+  let occasion = null // 今天过什么节（含应季动作），主进程下发，一天一变
 
   const rand = (arr) => (arr && arr.length ? arr[Math.floor(Math.random() * arr.length)] : null)
+  // pet://xxx.webm → 素材名（自检里用来断言播的到底是哪一段）
+  const nameOf = (src) =>
+    decodeURIComponent(String(src || '').replace(/^pet:\/*/i, '')).replace(/\.webm$/, '')
 
   function play(name, opts) {
     if (!name) return
@@ -94,6 +98,16 @@
 
   function nextIdle() {
     if (phase !== 'idle') return
+    // 今天过节就时不时来一段应景的（中秋赏月、堆雪人、讨糖南瓜灯…），
+    // 这些素材本来就有，不接进来就只能躺在 assets 里
+    if (occasion && occasion.anims && occasion.anims.length) {
+      const ch = ((cfg.calendar || {}).chance || {})[occasion.kind]
+      const p = ch == null ? (occasion.kind === 'festival' ? 0.35 : 0.12) : ch
+      if (Math.random() < p) {
+        play(rand(occasion.anims), { onEnd: () => nextIdle() })
+        return
+      }
+    }
     // 心情好就时不时雀跃一下，蔫了就垂头叹气——不用等到真的成功/失败才看得出来
     const m = cfg.mood || {}
     if (m.enabled !== false && Math.random() < (m.idleChance == null ? 0.3 : m.idleChance)) {
@@ -456,8 +470,31 @@
     showBubble(d.line, { source: d.source, phase: 'working', title: d.what }, 6000)
   }
 
+  // 作息 / 拆礼物都是「播一段 + 冒一句」，只有动画名和台词不同
+  function playOnce(d) {
+    if (!d || !d.anim) return
+    manualUntil = Date.now() + 9000
+    clearTimeout(phaseTimer)
+    hideBubble()
+    phase = 'idle'
+    play(d.anim, { onEnd: () => nextIdle() })
+    if (d.line) showBubble(d.line, null, 5000)
+  }
+
   api.on('pet:liedown', onLieDown)
   api.on('pet:stuck', onStuck)
+  api.on('pet:routine', playOnce)
+  api.on('pet:gift', playOnce)
+  // 今天过什么节，主进程跨天时会重推
+  api.on('pet:occasion', (d) => {
+    occasion = d || null
+  })
+  // 每日回顾：气泡显示战报，声音在主进程念
+  function onDigest(d) {
+    if (!d || !d.line) return
+    showBubble(d.line, null, 6000)
+  }
+  api.on('pet:digest', onDigest)
   api.on('pet:play', playByName)
   api.on('pet:walk-done', () => {
     manualUntil = Date.now() + 2500
@@ -509,6 +546,7 @@
     pool = boot.pools
     if (typeof boot.fullness === 'number') fullness = boot.fullness
     if (boot.mood) moodSnap = boot.mood
+    if (boot.occasion) occasion = boot.occasion
 
     // 心情相关的分支平时要等触发条件（连续失败 / 摸鱼 8 分钟 / 卡 5 分钟）才跑得到，
     // 真跑起来才发现报错就晚了。自检模式下把每条路径都走一遍，报错直接报出来。
@@ -524,18 +562,36 @@
         poke() // 赌气时戳：应该播「傲娇生气」+ 赌气台词
         const afterSulk = bubbleText.textContent
         const animSulk = vids[active].src
+        // 待机链里「过节」排在「心情」前面，先把今天的应季动作清掉才验得到心情分支；
+        // 概率也强制成 1，否则 30% 的概率会让断言时灵时不灵
+        occasion = null
+        cfg.mood = Object.assign({}, cfg.mood, { idleChance: 1 })
         nextIdle() // 蔫的时候待机：应该播「垂头叹气冒汗」
+        const sadAnim = vids[active].src
+        // 作息 / 拆礼物 / 每日回顾 / 节日动作
+        playOnce({ anim: '晨间刷牙', line: '早上好呀~' })
+        const routineAnim = vids[active].src
+        playOnce({ anim: '拆礼物', line: '攒够啦~' })
+        onDigest({ line: '今天跑了 12 轮，成了 10 个' }) // 每日回顾只冒气泡
+        const digestLine = bubbleText.textContent
+        occasion = { name: '中秋节', anims: ['中秋赏月吃月饼'], kind: 'festival' }
+        cfg.calendar = Object.assign({}, cfg.calendar, { chance: { festival: 1, season: 1 } })
+        nextIdle() // 过节时待机：应该播「中秋赏月吃月饼」
         probe = {
           poke: afterPoke,
           sulkLine: afterSulk,
-          sulkAnim: decodeURIComponent(String(animSulk).replace(/^pet:\/*/i, '')).replace(/\.webm$/, ''),
-          sadAnim: decodeURIComponent(String(vids[active].src).replace(/^pet:\/*/i, '')).replace(/\.webm$/, ''),
+          sulkAnim: nameOf(animSulk),
+          sadAnim: nameOf(sadAnim),
+          routineAnim: nameOf(routineAnim),
+          digestLine,
+          occasionAnim: nameOf(vids[active].src),
         }
       } catch (e) {
         probe = { error: String((e && e.message) || e) }
       }
-      // probe 里为了看效果改了心情，跑完恢复成开机时的真实值
+      // probe 里为了看效果改了心情和节日，跑完恢复成开机时的真实值
       if (boot.mood) moodSnap = boot.mood
+      occasion = boot.occasion || null
       phase = 'idle'
       hideBubble()
     }

@@ -13,23 +13,8 @@
 const fs = require('node:fs')
 const path = require('node:path')
 const { app } = require('electron')
-
-// 农历格式化器构造一次就够，别每次调用都 new
-let lunarFmt = null
-function lunarKey(date) {
-  try {
-    if (!lunarFmt) {
-      lunarFmt = new Intl.DateTimeFormat('zh-CN-u-ca-chinese', { month: 'numeric', day: 'numeric' })
-    }
-    const parts = lunarFmt.formatToParts(date)
-    const m = parts.find((p) => p.type === 'month')
-    const d = parts.find((p) => p.type === 'day')
-    if (!m || !d) return ''
-    return `${Number(m.value)}-${Number(d.value)}`
-  } catch (e) {
-    return '' // 没有 chinese calendar 就退化为没有节日，不影响喂食
-  }
-}
+// 农历 / 时令 / 时段统一在 calendar.js，节日动作和作息动画也用同一套判定
+const { lunarKey, seasonOf, slotOf } = require('./calendar')
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
 
@@ -81,22 +66,6 @@ function feed(cfg, food) {
   const after = clamp(before + gain, 0, 100)
   write({ value: after, at: Date.now(), lastFood: food || '' })
   return { food, before: Math.round(before), after: Math.round(after), gain: Math.round(gain) }
-}
-
-function seasonOf(date) {
-  const m = date.getMonth() + 1
-  if (m >= 3 && m <= 5) return 'spring'
-  if (m >= 6 && m <= 8) return 'summer'
-  if (m >= 9 && m <= 11) return 'autumn'
-  return 'winter'
-}
-
-function slotOf(date) {
-  const h = date.getHours()
-  if (h >= 5 && h < 10) return 'morning'
-  if (h >= 11 && h < 14) return 'noon'
-  if (h >= 17 && h < 21) return 'night'
-  return ''
 }
 
 function isBirthday(v, date) {
@@ -166,4 +135,4 @@ function lineFor(cfg, mood) {
   return mood === 'hungry' ? '肚子饿了…' : mood === 'stuffed' ? '吃撑了…' : '谢谢款待~'
 }
 
-module.exports = { fullness, feed, pickFood, occasionOf, moodOf, lineFor, lunarKey }
+module.exports = { fullness, feed, pickFood, occasionOf, moodOf, lineFor }
