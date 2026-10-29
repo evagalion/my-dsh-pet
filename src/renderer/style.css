@@ -18,12 +18,34 @@ body {
 #stage {
   position: absolute;
   inset: 0;
+  /* 只有 #hit 那一块能接收鼠标。素材是 640x360 按 contain 贴底显示的，
+     窗口里有一大片是空的透明像素——不收窄的话点空白处也能把鱼拖走 */
+  pointer-events: none;
+}
+
+/* 命中区：贴着鱼身的一块圆角区域，尺寸在 pet.hitArea 里配。
+   默认值是量出来的——素材 640x360 里鱼的包围盒稳定在 x 211~426 / y 61~330，
+   按 contain 贴底换算到 320x280 窗口只占中间 33% 宽、48% 高那一条 */
+#hit {
+  position: absolute;
+  left: 30%;
+  right: 30%;
+  bottom: 3%;
+  height: 52%;
+  border-radius: 48% 48% 30% 30% / 38% 38% 22% 22%;
+  pointer-events: auto;
 }
 
 /* 鼠标穿透开启时鱼淡一点，不然整窗透明、也不响应鼠标，开了跟没开看不出区别 */
 body.through #stage {
   opacity: 0.55;
   transition: opacity 0.25s ease;
+}
+
+/* 气泡和食物标签只是显示，别抢鼠标 */
+#bubble,
+#food {
+  pointer-events: none;
 }
 
 .pet {

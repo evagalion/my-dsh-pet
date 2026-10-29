@@ -3,7 +3,14 @@
     "width": 320,
     "height": 280,
     "scale": 1,
-    "clickThrough": false
+    "clickThrough": false,
+    "hitArea": {
+      "left": 30,
+      "right": 30,
+      "bottom": 3,
+      "height": 52,
+      "radius": "48% 48% 30% 30% / 38% 38% 22% 22%"
+    }
   },
   "idleAnims": ["待机呼吸休闲", "原地小憩沉眠", "哈欠连天", "悠闲哼歌"],
   "pollIntervalMs": 1000,

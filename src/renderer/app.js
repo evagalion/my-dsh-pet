@@ -3,6 +3,7 @@
 ;(function () {
   const api = window.petAPI
   const stage = document.getElementById('stage')
+  const hit = document.getElementById('hit')
   const vids = [document.getElementById('v-a'), document.getElementById('v-b')]
   const bubble = document.getElementById('bubble')
   const bubbleText = document.getElementById('bubble-text')
@@ -82,6 +83,17 @@
       if (r <= 0) return rand(c[1])
     }
     return rand(cand[cand.length - 1][1])
+  }
+
+  // 命中区尺寸写在配置里：不同动画里鱼的姿态不一样，写死不通用。
+  // 改完右键「重载配置」就能看到新的可点范围
+  function applyHitArea() {
+    const a = (cfg.pet && cfg.pet.hitArea) || {}
+    hit.style.left = (a.left == null ? 30 : a.left) + '%'
+    hit.style.right = (a.right == null ? 30 : a.right) + '%'
+    hit.style.bottom = (a.bottom == null ? 3 : a.bottom) + '%'
+    hit.style.height = (a.height == null ? 52 : a.height) + '%'
+    hit.style.borderRadius = a.radius || '48% 48% 30% 30% / 38% 38% 22% 22%'
   }
 
   // 亲密度够到哪一档，就能解锁那一档的台词
@@ -245,7 +257,9 @@
     if (api.debug) api.debug({ ev, ...extra })
   }
 
-  stage.addEventListener('pointerdown', (e) => {
+  // 事件挂在命中区而不是铺满窗口的 #stage 上：素材四周是空的透明像素，
+  // 挂 stage 的话点空白处也能把鱼拖走
+  hit.addEventListener('pointerdown', (e) => {
     dbg('pointerdown', {
       button: e.button,
       movementX: e.movementX,
@@ -264,7 +278,7 @@
     accX = 0
     accY = 0
     try {
-      stage.setPointerCapture(e.pointerId)
+      hit.setPointerCapture(e.pointerId)
     } catch (err) {
       /* noop */
     }
@@ -272,7 +286,7 @@
     if (pool.drag.length) play(pool.drag[0], { loop: true })
   })
 
-  stage.addEventListener('pointermove', (e) => {
+  hit.addEventListener('pointermove', (e) => {
     if (!dragging) return
 
     // movementX/Y 是浏览器给的原生位移，最可靠；拿不到就退回 screenX 差值
@@ -309,12 +323,12 @@
     if (ix || iy) api.moveBy(ix, iy)
   })
 
-  stage.addEventListener('pointerup', (e) => {
+  hit.addEventListener('pointerup', (e) => {
     if (!dragging) return
     dbg('pointerup', { movedDist, vel })
     dragging = false
     try {
-      stage.releasePointerCapture(e.pointerId)
+      hit.releasePointerCapture(e.pointerId)
     } catch (err) {
       /* noop */
     }
@@ -335,7 +349,7 @@
     }
   })
 
-  stage.addEventListener('contextmenu', (e) => {
+  hit.addEventListener('contextmenu', (e) => {
     e.preventDefault()
     api.openMenu()
   })
@@ -487,6 +501,7 @@
   api.on('pet:reload-config', (payload) => {
     cfg = payload.config || cfg
     if (payload.pools) pool = payload.pools
+    applyHitArea()
     hideBubble()
     phase = 'idle'
     nextIdle()
@@ -529,6 +544,7 @@
     if (boot.occasion) occasion = boot.occasion
     // 开机时窗口还没起来，applyClickThrough 那次 send 收不到，所以穿透状态走 boot 下发
     if (boot.clickThrough) document.body.classList.add('through')
+    applyHitArea()
 
     // 心情相关的分支平时要等触发条件（连续失败 / 摸鱼 8 分钟 / 卡 5 分钟）才跑得到，
     // 真跑起来才发现报错就晚了。自检模式下把每条路径都走一遍，报错直接报出来。
@@ -564,6 +580,17 @@
         const throughOn = document.body.classList.contains('through')
         onClickThrough(false)
         const throughOff = document.body.classList.contains('through')
+        // 命中区：stage 不收鼠标，只有 hit 收，且 hit 必须明显小于整个窗口
+        applyHitArea()
+        const hr = hit.getBoundingClientRect()
+        const hitInfo = {
+          stage: getComputedStyle(stage).pointerEvents,
+          hit: getComputedStyle(hit).pointerEvents,
+          w: Math.round(hr.width),
+          h: Math.round(hr.height),
+          winW: window.innerWidth,
+          winH: window.innerHeight,
+        }
         probe = {
           poke: afterPoke,
           sulkLine: afterSulk,
@@ -573,6 +600,7 @@
           digestLine,
           occasionAnim: nameOf(vids[active].src),
           through: throughOn === true && throughOff === false,
+          hit: hitInfo,
         }
       } catch (e) {
         probe = { error: String((e && e.message) || e) }
