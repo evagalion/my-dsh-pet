@@ -13,6 +13,9 @@ const { createFlight, step } = require('../shared/physics')
 const { classify, menuGroups } = require('../shared/animations')
 const sfx = require('./sfx')
 const feed = require('./feed')
+const mood = require('./mood')
+
+const pick = (arr) => (arr && arr.length ? arr[Math.floor(Math.random() * arr.length)] : null)
 
 protocol.registerSchemesAsPrivileged([
   { scheme: 'pet', privileges: { bypassCSP: true, supportFetchAPI: true, stream: true } },
@@ -245,6 +248,18 @@ function soundMenuLabel() {
   return '提示音：关'
 }
 
+// 心情 / 亲密度：只在菜单里显示，点不动。关掉时返回空数组被展开运算符吃掉
+function moodMenuItems() {
+  const s = mood.snapshot(cfg)
+  if (!s.enabled) return []
+  const label = { happy: '开心', calm: '平静', sad: '有点蔫' }[s.mood] || s.mood
+  const items = [{ label: `心情：${label}${s.sulking ? '（赌气中，别戳它）' : ''}`, enabled: false }]
+  if (s.bond != null) {
+    items.push({ label: `亲密度：${s.bond}%${s.level ? ' · ' + s.level.label : ''}`, enabled: false })
+  }
+  return items
+}
+
 // 喂鱼相关菜单项。饱腹度关掉时返回空数组（展开运算符会把它吃掉）
 function feedMenuItems() {
   const v = feed.fullness(cfg)
@@ -261,13 +276,14 @@ function feedMenuItems() {
       click: () => {
         const r = feed.feed(cfg, food)
         if (!r || !win) return
-        const mood = feed.moodOf(cfg, r.after)
+        const fed = feed.moodOf(cfg, r.after)
         win.webContents.send('pet:feed', {
           food: r.food,
           fullness: r.after,
-          mood,
-          line: feed.lineFor(cfg, mood),
+          mood: fed,
+          line: feed.lineFor(cfg, fed),
         })
+        bumpBond('feed')
         sfx.click(cfg, true) // 喂食也出一声，跟手
       },
     },
@@ -331,6 +347,7 @@ async function buildMenuTemplate() {
     { type: 'separator' },
     { label: '摸一下', click: () => win.webContents.send('pet:poke') },
     ...feedMenuItems(),
+    ...moodMenuItems(),
     actionMenu(),
     { label: '它在干嘛？', click: () => speakNow() },
     { label: '各 agent 状态（点开看各自在忙啥）', submenu: statusItems },
@@ -406,6 +423,8 @@ async function buildMenuTemplate() {
         pools = classify(assets, cfg)
         sfx.resetEdgeProbe() // python 路径可能刚装好，重新探测一次
         win.webContents.send('pet:reload-config', { config: cfg, pools })
+        lastMoodJson = '' // 配置可能改了亲密度等级，强制重推一次
+        pushMood()
       },
     },
     { type: 'separator' },
@@ -458,6 +477,51 @@ function resetPosition() {
   persistPosition()
 }
 
+// 亲密度：戳一下 / 喂一口都涨一点，并把「上次互动时间」刷新（衰减从头算）
+function bumpBond(kind) {
+  mood.bumpBond(cfg, kind)
+  pushMood()
+}
+
+// 心情快照变了才推。亲密度是按时间戳现算的，每秒推一次纯属浪费
+let lastMoodJson = ''
+function pushMood() {
+  if (!win) return
+  const snap = mood.snapshot(cfg)
+  const j = JSON.stringify(snap)
+  if (j === lastMoodJson) return
+  lastMoodJson = j
+  win.webContents.send('pet:mood', snap)
+}
+
+// 「一起躺平」和「卡太久」都只在三家各自的轮询结果上判断，不打断正在播的状态动画
+function applyMood(all) {
+  if (!win || win.isDestroyed()) return
+  const m = cfg.mood || {}
+  if (m.enabled === false) return
+  const w = mood.watch(cfg, all, Date.now())
+  const lines = m.lines || {}
+
+  if (w.lieDown) {
+    win.webContents.send('pet:liedown', {
+      anim: pick((m.anims || {}).lieDown) || '原地小憩沉眠',
+      line: pick(lines.lieDown) || '',
+    })
+  }
+  if (w.stuck) {
+    const tpl = lines.stuck || '{agent}这一轮跑了 {min} 分钟了，要不要看看'
+    const line = String(tpl)
+      .replace('{agent}', `${agentOf(w.stuck.source).label} `)
+      .replace('{min}', String(w.stuck.minutes))
+    win.webContents.send('pet:stuck', {
+      line,
+      source: w.stuck.source,
+      what: w.stuck.what,
+      minutes: w.stuck.minutes,
+    })
+  }
+}
+
 function pushState(s, force) {
   lastKnown = {
     phase: s.phase,
@@ -484,6 +548,13 @@ function pushState(s, force) {
   } catch {
     /* 声音不是关键路径，出错也不能影响桌宠 */
   }
+  // 成功/失败各记一笔流水，攒出心情（同一次结果只记一次，重复推送不会刷分）
+  try {
+    mood.note(cfg, s.phase)
+    pushMood()
+  } catch {
+    /* 心情不是关键路径 */
+  }
   win.webContents.send('pet:state', Object.assign({}, s, { force: !!force }))
 }
 
@@ -507,7 +578,15 @@ app.whenReady().then(() => {
   ipcMain.handle('pet:boot', () => {
     const assets = listAssets()
     pools = classify(assets, cfg)
-    return { config: cfg, assets, pools, root: ROOT, fullness: feed.fullness(cfg) }
+    return {
+      config: cfg,
+      assets,
+      pools,
+      root: ROOT,
+      fullness: feed.fullness(cfg),
+      mood: mood.snapshot(cfg),
+      selftest: SELFTEST,
+    }
   })
 
   // Retina 下 movementX/Y 是小数（如 -8.5），setPosition 只接受整数，
@@ -561,6 +640,8 @@ app.whenReady().then(() => {
   ipcMain.on('pet:drag-end', () => persistPosition())
   // 点一下鱼身：播随机点击音效。渲染层已经判过「没拖动」了，这里只管出声
   ipcMain.on('pet:click', () => sfx.click(cfg))
+  // 戳它 / 喂它都涨亲密度。渲染层戳的时候顺手报一下
+  ipcMain.on('pet:bond', (_e, kind) => bumpBond(kind === 'feed' ? 'feed' : 'poke'))
   ipcMain.on('pet:hover', (_e, inside) => {
     if (!win || !cfg.pet.clickThrough) return
     win.setIgnoreMouseEvents(!inside, { forward: true })
@@ -582,12 +663,23 @@ app.whenReady().then(() => {
   })
 
   watcher = createWatcher(cfg)
+  // 心情要看三家各自的状态，全量探测不必每秒做一次，隔一阵子扫一遍就够
+  let moodAt = 0
   const tick = async () => {
     try {
       const s = await watcher.poll()
       if (s && win) pushState(s)
     } catch (e) {
       console.error('[pet] watcher error', e.message)
+    }
+    const now = Date.now()
+    const every = (cfg.mood && cfg.mood.pollEveryMs) || 15000
+    if (now - moodAt > every) {
+      moodAt = now
+      Promise.resolve()
+        .then(() => watcher.pollAll())
+        .then((all) => applyMood(all))
+        .catch(() => {})
     }
   }
   tick()

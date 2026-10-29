@@ -103,6 +103,46 @@
       "ok": ["谢谢款待~", "好吃！", "再来一口嘛"]
     }
   },
+  "mood": {
+    "enabled": true,
+    "windowMs": 1800000,
+    "happyAt": 1,
+    "sadAt": -1,
+    "sulkErrors": 3,
+    "sulkMs": 240000,
+    "pollEveryMs": 15000,
+    "idleChance": 0.3,
+    "lieDownAfterMin": 8,
+    "lieDownCooldownMs": 1200000,
+    "stuckAfterMin": 5,
+    "stuckRepeatMs": 300000,
+    "anims": {
+      "happy": ["工作状态-雀跃庆祝"],
+      "sad": ["工作状态-垂头叹气冒汗"],
+      "sulk": ["点击回应-傲娇生气"],
+      "lieDown": ["原地小憩沉眠", "哈欠连天", "悠闲哼歌"]
+    },
+    "lines": {
+      "happy": ["今天好顺呀~", "心情不错，哼个歌", "咱俩配合得真好"],
+      "sad": ["唉，又没跑通…", "有点累了呢", "让我安静一会儿…"],
+      "sulk": ["哼，不理你！", "别戳我，正烦着呢", "你先哄哄我再说"],
+      "lieDown": ["都在摸鱼呀，那我也睡会儿~", "陪你一起躺平…", "这么安静，先眯一会儿"],
+      "stuck": "{agent}这一轮跑了 {min} 分钟了，要不要看看"
+    }
+  },
+  "bond": {
+    "enabled": true,
+    "initial": 20,
+    "decayPerHour": 0.6,
+    "gains": { "poke": 1, "feed": 2 },
+    "levels": [
+      { "at": 0, "key": "shy", "label": "认生", "lines": ["你…你是谁呀", "别靠太近啦", "我有点怕生…"] },
+      { "at": 20, "key": "known", "label": "面熟", "lines": ["哦，是你呀", "今天也来啦", "还行吧，不算讨厌"] },
+      { "at": 45, "key": "friend", "label": "熟人", "lines": ["你来啦，等你半天了", "摸摸头~", "跟你混熟了呢"] },
+      { "at": 70, "key": "close", "label": "要好", "lines": ["最黏你了~", "不许走，再陪我一会儿", "你是不是也喜欢我"] },
+      { "at": 90, "key": "best", "label": "形影不离", "lines": ["我们已经是老搭档啦", "你去哪我去哪~", "这辈子跟定你了"] }
+    ]
+  },
   "weights": {
     "idle": 10,
     "turn": 4,

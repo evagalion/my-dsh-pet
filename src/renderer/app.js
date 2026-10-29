@@ -25,6 +25,10 @@
   let suppressHover = false
   let manualUntil = 0 // 手动点播后短暂屏蔽状态机，别刚点就被工作状态抢回去
   let fullness = null // 饱腹度，主进程给的（开机一次 + 每次喂食后更新）
+  // 心情快照：mood=最近顺不顺，sulking=连续失败正在赌气，bond=亲密度
+  let moodSnap = { enabled: true, mood: 'calm', sulking: false, bond: null, level: null }
+  let holdLine = '' // 「卡太久」这类提醒要在几秒内压住状态机的台词，不然下一秒就被冲掉
+  let holdUntil = 0
 
   const rand = (arr) => (arr && arr.length ? arr[Math.floor(Math.random() * arr.length)] : null)
 
@@ -79,8 +83,30 @@
     return rand(cand[cand.length - 1][1])
   }
 
+  // 亲密度够到哪一档，就能解锁那一档的台词
+  function bondLevelNow() {
+    const b = cfg.bond || {}
+    if (b.enabled === false || moodSnap.bond == null) return null
+    let hit = null
+    for (const lv of b.levels || []) if (moodSnap.bond >= (lv.at || 0)) hit = lv
+    return hit
+  }
+
   function nextIdle() {
     if (phase !== 'idle') return
+    // 心情好就时不时雀跃一下，蔫了就垂头叹气——不用等到真的成功/失败才看得出来
+    const m = cfg.mood || {}
+    if (m.enabled !== false && Math.random() < (m.idleChance == null ? 0.3 : m.idleChance)) {
+      const anims = ((m.anims || {})[moodSnap.mood]) || []
+      if (anims.length) {
+        const a = rand(anims)
+        play(a, { onEnd: () => nextIdle() })
+        if (moodSnap.mood === 'sad' && Math.random() < 0.5) {
+          showBubble(rand((m.lines || {}).sad) || '唉…', null, 2600)
+        }
+        return
+      }
+    }
     // 饿了就时不时自己嘟囔一句，不用等到你去点菜单才知道
     const f = cfg.feed || {}
     const hungryAt = f.hungryAt == null ? 25 : f.hungryAt
@@ -176,7 +202,9 @@
         bubbleLine = texts.length ? rand(texts) : (cfg.phases[phase] || {}).label || ''
       }
       const transient = phase === 'success' || phase === 'error'
-      showBubble(bubbleLine, s, transient ? 6000 : 0)
+      // 提醒类台词（卡太久）在几秒内优先级最高，不然每秒一次的状态推送会把它冲掉
+      const line = Date.now() < holdUntil && holdLine ? holdLine : bubbleLine
+      showBubble(line, s, transient ? 6000 : 0)
       if (transient) {
         phaseTimer = setTimeout(() => {
           phase = 'idle'
@@ -325,12 +353,26 @@
 
   function poke() {
     api.click() // 点一下出声。音效在主进程播，不经过渲染层
+    api.bond('poke') // 戳一下涨一点亲密度
+    const m = cfg.mood || {}
+    // 连续失败之后它会赌气：戳它也不给好脸色，扭头播个傲娇生气
+    if (m.enabled !== false && moodSnap.sulking) {
+      const a = rand(((m.anims || {}).sulk) || []) || rand(pool.clicks)
+      play(a || pickWeighted(), { onEnd: () => nextIdle() })
+      squish()
+      showBubble(rand((m.lines || {}).sulk) || '哼，不理你！', null, 2600)
+      return
+    }
     const a = rand(pool.clicks)
     play(a || pickWeighted(), {
       onEnd: () => nextIdle(),
     })
     squish()
-    showBubble(rand(cfg.idleTexts) || '', null, 2600)
+    // 混熟了就会说更亲昵的话（亲密度分级台词），没到级别就退回通用闲聊
+    const lv = bondLevelNow()
+    const lines = lv && lv.lines
+    if (lines && lines.length && Math.random() < 0.5) showBubble(rand(lines), null, 2600)
+    else showBubble(rand(cfg.idleTexts) || '', null, 2600)
   }
 
   function land() {
@@ -391,6 +433,31 @@
   }
 
   api.on('pet:feed', onFeed)
+  // 心情变了同步过来，待机链和戳它的反应都看这个
+  api.on('pet:mood', (d) => {
+    if (d) moodSnap = Object.assign({}, moodSnap, d)
+  })
+  // 三家都在摸鱼 → 它也躺平
+  function onLieDown(d) {
+    if (!d) return
+    manualUntil = Date.now() + 9000
+    clearTimeout(phaseTimer)
+    hideBubble()
+    phase = 'idle'
+    play(d.anim || rand(pool.idle), { onEnd: () => nextIdle() })
+    if (d.line) showBubble(d.line, null, 5000)
+  }
+
+  // 某一轮跑太久了 → 冒个泡提醒，不打断正在播的动画
+  function onStuck(d) {
+    if (!d || !d.line) return
+    holdLine = d.line
+    holdUntil = Date.now() + 6000
+    showBubble(d.line, { source: d.source, phase: 'working', title: d.what }, 6000)
+  }
+
+  api.on('pet:liedown', onLieDown)
+  api.on('pet:stuck', onStuck)
   api.on('pet:play', playByName)
   api.on('pet:walk-done', () => {
     manualUntil = Date.now() + 2500
@@ -441,13 +508,45 @@
     cfg = boot.config
     pool = boot.pools
     if (typeof boot.fullness === 'number') fullness = boot.fullness
+    if (boot.mood) moodSnap = boot.mood
+
+    // 心情相关的分支平时要等触发条件（连续失败 / 摸鱼 8 分钟 / 卡 5 分钟）才跑得到，
+    // 真跑起来才发现报错就晚了。自检模式下把每条路径都走一遍，报错直接报出来。
+    let probe = null
+    if (boot.selftest) {
+      try {
+        poke() // 普通戳一下（亲密度台词分支）
+        const afterPoke = bubbleText.textContent
+        onFeed({ food: '吃西瓜', fullness: 80, mood: 'ok', line: '好吃！' })
+        onLieDown({ anim: '原地小憩沉眠', line: '陪你一起躺平…' })
+        onStuck({ line: 'Cursor 这一轮跑了 6 分钟了，要不要看看', source: 'cursor', what: '大肥鱼' })
+        moodSnap = Object.assign({}, moodSnap, { sulking: true, mood: 'sad' })
+        poke() // 赌气时戳：应该播「傲娇生气」+ 赌气台词
+        const afterSulk = bubbleText.textContent
+        const animSulk = vids[active].src
+        nextIdle() // 蔫的时候待机：应该播「垂头叹气冒汗」
+        probe = {
+          poke: afterPoke,
+          sulkLine: afterSulk,
+          sulkAnim: decodeURIComponent(String(animSulk).replace(/^pet:\/*/i, '')).replace(/\.webm$/, ''),
+          sadAnim: decodeURIComponent(String(vids[active].src).replace(/^pet:\/*/i, '')).replace(/\.webm$/, ''),
+        }
+      } catch (e) {
+        probe = { error: String((e && e.message) || e) }
+      }
+      // probe 里为了看效果改了心情，跑完恢复成开机时的真实值
+      if (boot.mood) moodSnap = boot.mood
+      phase = 'idle'
+      hideBubble()
+    }
+
     const first = rand(pool.idle) || rand(pool.fun) || (boot.assets || [])[0]
     play(first, {})
     const v = vids[active]
-    v.addEventListener('playing', () => selftestReport(boot, { playing: true }), { once: true })
-    v.addEventListener('error', () => selftestReport(boot, { playing: false, err: 'media error' }), {
+    v.addEventListener('playing', () => selftestReport(boot, { playing: true, probe }), { once: true })
+    v.addEventListener('error', () => selftestReport(boot, { playing: false, err: 'media error', probe }), {
       once: true,
     })
-    setTimeout(() => selftestReport(boot, { note: 'fallback-timeout' }), 12000)
+    setTimeout(() => selftestReport(boot, { note: 'fallback-timeout', probe }), 12000)
   })
 })()
