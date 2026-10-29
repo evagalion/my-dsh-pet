@@ -1,16 +1,20 @@
 'use strict'
 
 // 提示音 / 提示语音：状态一变就播一下。
-//   voice 模式 —— 系统 TTS（say）+ 提高音调，可爱萝莉音；可自定义台词
+//   voice 模式 —— 念台词。引擎二选一：
+//       kokoro：本地神经网络 TTS（sherpa-onnx + Kokoro-82M v1.1-zh），自然得多，
+//               55 个中文女声可选，首次合成约 1~2 秒，之后走缓存秒播
+//       say   ：macOS 系统 TTS + 提高音调（机械味重，作为兜底）
 //   tone  模式 —— assets/sfx/<agent>-<event>.wav 合成音
-// 两种都走系统进程，不经过渲染层：窗口没焦点也响，也不受 Chromium 自动播放限制
+// 全部走系统进程，不经过渲染层：窗口没焦点也响，也不受 Chromium 自动播放限制
 // （渲染层用 AudioContext 的话，没有用户手势会被挂起，桌宠恰好是无人值守的）。
 
 const fs = require('node:fs')
 const path = require('node:path')
 const os = require('node:os')
+const crypto = require('node:crypto')
 const { execFile } = require('node:child_process')
-const { ASSETS_DIR } = require('./paths')
+const { ASSETS_DIR, ROOT } = require('./paths')
 
 const IS_MAC = os.platform() === 'darwin'
 const SAY = '/usr/bin/say'
@@ -33,6 +37,112 @@ function canSpeak() {
   return IS_MAC && fs.existsSync(SAY)
 }
 
+// ---- Kokoro 本地神经 TTS ----
+
+function voiceCfg(cfg) {
+  return ((cfg && cfg.sound && cfg.sound.voice) || {})
+}
+
+function engineOf(cfg) {
+  return voiceCfg(cfg).engine === 'kokoro' ? 'kokoro' : 'say'
+}
+
+// 解析出 kokoro 的二进制与模型路径；缺任何一个就返回 ok:false，上层自动退回 say
+function kokoroPaths(cfg) {
+  const k = voiceCfg(cfg).kokoro || {}
+  const dir = k.dir ? path.resolve(ROOT, k.dir) : path.join(ASSETS_DIR, 'tts', 'kokoro-multi-lang-v1_1')
+  const bin = k.bin
+    ? path.resolve(ROOT, k.bin)
+    : path.join(ASSETS_DIR, 'tts', 'sherpa-onnx-v2.0.1-osx-arm64-shared', 'bin', 'sherpa-onnx-offline-tts')
+  const ok =
+    fs.existsSync(bin) &&
+    fs.existsSync(path.join(dir, 'model.onnx')) &&
+    fs.existsSync(path.join(dir, 'voices.bin')) &&
+    fs.existsSync(path.join(dir, 'tokens.txt'))
+  return {
+    ok,
+    bin,
+    dir,
+    sid: k.sid == null ? 3 : k.sid,
+    speed: k.speed == null ? 1 : k.speed,
+    threads: k.numThreads == null ? 2 : k.numThreads,
+    label: k.label || `Kokoro#${k.sid == null ? 3 : k.sid}`,
+  }
+}
+
+function kokoroAvailable(cfg) {
+  return engineOf(cfg) === 'kokoro' && kokoroPaths(cfg).ok
+}
+
+function kokoroArgs(p, text, out) {
+  return [
+    `--kokoro-model=${path.join(p.dir, 'model.onnx')}`,
+    `--kokoro-voices=${path.join(p.dir, 'voices.bin')}`,
+    `--kokoro-tokens=${path.join(p.dir, 'tokens.txt')}`,
+    `--kokoro-data-dir=${path.join(p.dir, 'espeak-ng-data')}`,
+    `--kokoro-lexicon=${path.join(p.dir, 'lexicon-us-en.txt')},${path.join(p.dir, 'lexicon-zh.txt')}`,
+    `--tts-rule-fsts=${path.join(p.dir, 'date-zh.fst')},${path.join(p.dir, 'number-zh.fst')}`,
+    `--num-threads=${p.threads}`,
+    `--sid=${p.sid}`,
+    `--speed=${p.speed}`,
+    `--output-filename=${out}`,
+    text,
+  ]
+}
+
+// 台词就那几句，合成一次缓存起来，之后就是秒播（否则每次都要等 1~2 秒才出声）
+function ttsCacheDir() {
+  return path.join(os.tmpdir(), 'dafeiyu-tts')
+}
+
+function speakKokoro(cfg, text, force) {
+  const p = kokoroPaths(cfg)
+  if (!p.ok) return false
+  if (!force && Date.now() - lastAt < gapOf(cfg)) return false
+  lastAt = Date.now()
+
+  const key = crypto.createHash('md5').update(`${p.sid}|${p.speed}|${text}`).digest('hex').slice(0, 16)
+  const out = path.join(ttsCacheDir(), `${key}.wav`)
+  const vol = String(volOf(cfg))
+
+  const playOut = () => execFile('afplay', ['-v', vol, out], { timeout: 20000 }, () => {})
+  if (fs.existsSync(out) && fs.statSync(out).size > 1024) {
+    playOut()
+    return true
+  }
+
+  try {
+    fs.mkdirSync(ttsCacheDir(), { recursive: true })
+  } catch (e) {
+    /* 建不了缓存目录就退回 say */
+    return false
+  }
+  execFile(p.bin, kokoroArgs(p, text, out), { timeout: 60000 }, (err) => {
+    if (err || !fs.existsSync(out)) {
+      console.error('[pet] Kokoro 合成失败，退回系统 say：', (err && err.message) || '没有输出文件')
+      sayFallback(cfg, text)
+      return
+    }
+    playOut()
+  })
+  return true
+}
+
+function sayFallback(cfg, text) {
+  if (!canSpeak()) return false
+  const v = voiceCfg(cfg)
+  const name = v.name || 'Meijia'
+  const rate = v.rate == null ? 200 : v.rate
+  const pitch = v.pitch == null ? 90 : v.pitch
+  execFile(
+    SAY,
+    ['-v', name, '-r', String(rate), `[[pbas +${pitch}]] [[volm ${volOf(cfg)}]] ${text}`],
+    { timeout: 15000 },
+    () => {}
+  )
+  return true
+}
+
 // 台词模板：{agent} 换成 agent 名，{what} 换成正在处理的问题
 function renderLine(tpl, cfg, s) {
   if (!tpl) return ''
@@ -46,22 +156,16 @@ function renderLine(tpl, cfg, s) {
 }
 
 function speak(cfg, s, event, force) {
-  if (!canSpeak()) return false
-  const v = ((cfg && cfg.sound) || {}).voice || {}
+  const v = voiceCfg(cfg)
   const text = renderLine((v.lines || {})[event], cfg, s)
   if (!text) return false
 
-  const name = v.name || 'Meijia'
-  const rate = v.rate == null ? 200 : v.rate
-  const pitch = v.pitch == null ? 90 : v.pitch
-  const vol = (cfg.sound && cfg.sound.volume) == null ? 0.35 : cfg.sound.volume
+  if (engineOf(cfg) === 'kokoro' && speakKokoro(cfg, text, force)) return true
+
+  if (!canSpeak()) return false
   if (!force && Date.now() - lastAt < gapOf(cfg)) return false
   lastAt = Date.now()
-
-  // [[pbas +N]] 抬高音调（稚嫩感），[[volm]] 控音量
-  const script = `[[pbas +${pitch}]] [[volm ${vol}]] ${text}`
-  execFile(SAY, ['-v', name, '-r', String(rate), script], { timeout: 15000 }, () => {})
-  return true
+  return sayFallback(cfg, text)
 }
 
 function tone(cfg, source, event, force) {
@@ -82,6 +186,11 @@ function tone(cfg, source, event, force) {
 function gapOf(cfg) {
   const g = cfg && cfg.sound && cfg.sound.minGapMs
   return g == null ? 6000 : g
+}
+
+function volOf(cfg) {
+  const v = cfg && cfg.sound && cfg.sound.volume
+  return v == null ? 0.35 : v
 }
 
 function play(cfg, s) {
@@ -112,7 +221,7 @@ function play(cfg, s) {
   // working 只认"新一轮"，thinking/organizing 之间来回切不响
   if (s.phase === 'working' && !FRESH_START.has(prev)) return false
 
-  if (mode === 'voice' && canSpeak()) return speak(cfg, s, event)
+  if (mode === 'voice' && (kokoroAvailable(cfg) || canSpeak())) return speak(cfg, s, event)
   return tone(cfg, s.source || 'workbuddy', event) // 语音不可用就退回音效
 }
 
@@ -121,8 +230,23 @@ function preview(cfg) {
   const mode = modeOf(cfg)
   if (mode === 'off') return false
   const sample = { source: 'workbuddy', phase: 'success' }
-  if (mode === 'voice' && canSpeak()) return speak(cfg, sample, 'done', true)
+  if (mode === 'voice' && (kokoroAvailable(cfg) || canSpeak())) return speak(cfg, sample, 'done', true)
   return tone(cfg, 'workbuddy', 'done', true)
 }
 
-module.exports = { play, preview, modeOf }
+// 菜单上显示当前走的是哪个引擎
+function voiceLabel(cfg) {
+  if (engineOf(cfg) === 'kokoro') {
+    const p = kokoroPaths(cfg)
+    return p.ok ? p.label : `${p.label}（缺文件，已退回系统语音）`
+  }
+  return voiceCfg(cfg).name || 'Meijia'
+}
+
+// 试听页路径（挑音色用），不存在返回 null
+function auditionPath() {
+  const p = path.join(ASSETS_DIR, 'tts', 'audition.html')
+  return fs.existsSync(p) ? p : null
+}
+
+module.exports = { play, preview, modeOf, voiceLabel, auditionPath, kokoroAvailable }

@@ -6,6 +6,7 @@ const os = require('node:os')
 const { execFile } = require('node:child_process')
 
 const { newestProject, cleanProjectName, readHead, decidePhase } = require('./transcript')
+const { stepsOf, stepText } = require('./steps')
 
 const DB = path.join(os.homedir(), '.cursor', 'ai-tracking', 'ai-code-tracking.db')
 const PROJECTS = path.join(os.homedir(), '.cursor', 'projects')
@@ -19,6 +20,7 @@ const WORKING_MS = 20_000    // 20s 内有动静 -> 正在写
 const DONE_MS = 35_000       // 停了且已回答完 -> 搞定的庆祝窗口
 const COOLDOWN_MS = 50_000   // 除此之外最多再算 30s 收尾
 const CACHE_MS = 400         // 去抖，别让轮询放大成密集查询
+const STEP_LIMIT = 12        // 最多回溯多少步（气泡只显示最新一步，菜单列出最近若干步）
 
 const QUERY =
   'SELECT' +
@@ -50,12 +52,16 @@ function bestTranscript() {
   const s = newestProject(PROJECTS, { depth: 2, dirName: 'agent-transcripts' })
   if (!s) return null
   const h = readHead(s.file, s.mtime, s.size)
+  const steps = stepsOf('cursor', s.file, { cwd: h.cwd, limit: STEP_LIMIT })
   return {
     mtime: s.mtime,
+    file: s.file,
     project: cleanProjectName(s.project),
     title: h.title,
     cwd: h.cwd,
     tail: h,
+    steps,
+    step: steps.length ? stepText(steps[0]) : '',
   }
 }
 
@@ -104,6 +110,8 @@ function createCursorWatcher() {
       cwd: (t && t.cwd) || '',
       detail: row && row.lastFile ? path.basename(String(row.lastFile)) : '',
       title: (t && t.title) || (row && row.lastTitle) || '',
+      step: (t && t.step) || '',
+      steps: (t && t.steps) || [],
     }
     return cache
   }

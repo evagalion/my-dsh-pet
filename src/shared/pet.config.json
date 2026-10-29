@@ -18,15 +18,27 @@
     "cursor": { "label": "Cursor", "short": "CU", "color": "#d97706" },
     "codebuddy": { "label": "CodeBuddy", "short": "CB", "color": "#7c3aed" }
   },
+  "steps": {
+    "enabled": true
+  },
   "sound": {
     "enabled": true,
     "mode": "voice",
     "volume": 0.35,
     "minGapMs": 6000,
     "voice": {
+      "engine": "kokoro",
       "name": "Meijia",
       "rate": 205,
       "pitch": 90,
+      "kokoro": {
+        "label": "Kokoro#3",
+        "sid": 3,
+        "speed": 1,
+        "numThreads": 2,
+        "dir": "assets/tts/kokoro-multi-lang-v1_1",
+        "bin": "assets/tts/sherpa-onnx-v2.0.1-osx-arm64-shared/bin/sherpa-onnx-offline-tts"
+      },
       "lines": {
         "start": "{agent}开始干活啦~",
         "done": "这一轮搞定啦，真棒！",

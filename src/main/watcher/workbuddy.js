@@ -10,6 +10,7 @@ const fs = require('node:fs')
 const path = require('node:path')
 const os = require('node:os')
 const { execFile } = require('node:child_process')
+const { stepsOf, stepText, workbuddyFile } = require('./steps')
 
 const HOME = os.homedir()
 const DB = path.join(HOME, '.workbuddy', 'workbuddy.db')
@@ -25,6 +26,7 @@ const QUIET_MS = 150_000        // status=working 但静默超过 2.5min -> 大�
                                 // （留够余量：跑一条长 bash 静默一两分钟很常见，别误报）
 const WARM_MS = 45_000          // status 不明时的等待窗口
 const OK_AFTER = 15_000         // 完成/出错的庆祝窗口
+const STEP_LIMIT = 12           // 最多回溯多少步
 
 const BUSY = /working|running|in[_-]?progress|active|pending|busy|streaming|tool/i
 const DONE = /complet|done|success|finish/i
@@ -112,6 +114,12 @@ function createWorkBuddyWatcher() {
     } else if (DONE.test(st)) phase = 'idle' // 庆祝过了就回摸鱼，别再挂着"等你"
     else if (gap < WARM_MS) phase = editGap < EDIT_MS ? 'working' : 'waiting'
 
+    // 每一步在干嘛：会话记录里的 function_call（跟 cursor/codebuddy 同源的思路）
+    const file = workbuddyFile(cur.id, cur.cwd)
+    const steps = file ? stepsOf('workbuddy', file, { cwd: cur.cwd, limit: STEP_LIMIT }) : []
+    // 只有在跑的时候才展示步骤，闲着的时候挂着上一步很怪
+    const showStep = phase === 'working' || phase === 'thinking' || phase === 'organizing'
+
     return {
       source: 'workbuddy',
       online: true,
@@ -120,6 +128,8 @@ function createWorkBuddyWatcher() {
       cwd: cur.cwd || '',
       title: cur.title || '',
       detail: '',
+      step: showStep && steps.length ? stepText(steps[0]) : '',
+      steps,
       successAt,
       errorAt,
     }

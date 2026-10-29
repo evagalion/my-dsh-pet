@@ -225,6 +225,11 @@ function agentOf(source) {
   return (cfg.agents && cfg.agents[source]) || { label: source === 'none' ? '没有在跑' : source || '—', color: '#8a8a8a' }
 }
 
+// 是否展示"每一步在干嘛"
+function stepsOn() {
+  return !(cfg && cfg.steps && cfg.steps.enabled === false)
+}
+
 function whatOf(s) {
   const t = s && (s.title || s.project)
   return t ? String(t).slice(0, 28) : ''
@@ -234,10 +239,24 @@ function whatOf(s) {
 // 一旦写成 async 返回的就是 Promise，Electron 构建菜单时会直接抛类型转换错误，整个菜单弹不出来。
 function soundMenuLabel() {
   const m = sfx.modeOf(cfg)
-  const v = (cfg.sound && cfg.sound.voice && cfg.sound.voice.name) || 'Meijia'
-  if (m === 'voice') return `提示音：语音（${v}）`
+  if (m === 'voice') return `提示音：语音（${sfx.voiceLabel(cfg)}）`
   if (m === 'tone') return '提示音：音效'
   return '提示音：关'
+}
+
+// 「它刚做了啥」：把会话记录里回溯出来的最近几步列出来（新的在上）
+function stepMenu() {
+  if (!stepsOn()) return { label: '最近步骤（已关闭）', enabled: false }
+  const steps = (lastKnown && lastKnown.steps) || []
+  if (!steps.length) return { label: '最近步骤（还没抓到）', enabled: false }
+  return {
+    label: `最近步骤（${agentOf(lastKnown.source).label}）`,
+    submenu: steps.slice(0, 8).map((st, i) => ({
+      label: `${i === 0 ? '现在 ' : ''}${st.verb || st.tool}${st.target ? ' ' + st.target : ''}`,
+      enabled: i === 0,
+      click: () => {},
+    })),
+  }
 }
 
 // 菜单要等三路探测结果，但绝不能被探测卡住：超时就当"都没在跑"，先把菜单弹出来
@@ -275,6 +294,7 @@ async function buildMenuTemplate() {
     actionMenu(),
     { label: '它在干嘛？', click: () => speakNow() },
     { label: '各 agent 状态（点开看各自在忙啥）', submenu: statusItems },
+    stepMenu(),
     { type: 'separator' },
     {
       label: '打开 WorkBuddy',
@@ -310,6 +330,14 @@ async function buildMenuTemplate() {
         sfx.preview(cfg) // 切完立刻来一句，好确认音色/音量
       },
     },
+    ...(sfx.auditionPath()
+      ? [
+          {
+            label: '挑语音音色…（55 个中文女声试听）',
+            click: () => shell.openPath(sfx.auditionPath()),
+          },
+        ]
+      : []),
     {
       label: cfg.pet.clickThrough ? '鼠标穿透：开（点不到我）' : '鼠标穿透：关（可以拖我）',
       click: () => {
@@ -384,6 +412,9 @@ function pushState(s, force) {
     source: s.source,
     title: s.title || '',
     cwd: s.cwd || '',
+    // steps.enabled=false 就不显示"每一步"，只留档位
+    step: stepsOn() ? s.step || '' : '',
+    steps: stepsOn() && Array.isArray(s.steps) ? s.steps.slice(0, 12) : [],
   }
   if (s.cwd) lastCwd = s.cwd
   // 托盘悬停也能一眼看出是哪个 agent 在处理哪个问题

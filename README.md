@@ -63,6 +63,34 @@ npm run icon       # 重新生成托盘图标 assets/tray.png
 > Cursor 写 `{"type":"turn_ended","status":"success"}`，CodeBuddy 写 `turn-metrics`。看到标记就算跑完，立刻庆祝，35s 后直接转摸鱼，**不会**退回收尾档。
 > 另外还会看最后一条消息是不是 assistant、以及它是不是只在发起 tool 调用（是的话说明还在跑，不算完）。
 
+### 每一步在干嘛（步骤流）
+
+除了档位，桌宠还能显示 agent **当前这一步具体在做什么**（读哪个文件、跑哪条命令、搜什么关键词）。
+
+| 工具 | 步骤数据从哪来 |
+| --- | --- |
+| **WorkBuddy** | `~/.workbuddy/projects/<项目>/<sessionId>.jsonl` 里的 `{"type":"function_call","name":"Bash","arguments":"{...}"}` |
+| **CodeBuddy** | `~/.codebuddy/projects/<项目>/<会话>.jsonl`，同上（`arguments` 也是 JSON 字符串） |
+| **Cursor** | 会话 jsonl 里 assistant 消息的 `content[].type === "tool_use"`，`{name, input}` |
+
+统一解析在 `src/main/watcher/steps.js`：读文件尾 256KB（工具参数可能很长，读少了会漏步骤），把工具名翻成中文动词：
+
+```
+Read/Write/Edit/StrReplace → 读 / 写 / 改      Grep → 搜   Glob → 找
+Bash/Shell/Terminal        → 跑命令（node -e、python -c 归为"跑脚本"）
+WebSearch/WebFetch         → 搜网页 / 看网页    Task* → 建任务 / 更新任务
+AskUserQuestion → 问你      Skill → 用技能       show_widget → 画图
+```
+
+展示位置：
+
+- **气泡**：新增一行 `› 改 src/main/steps.js`（等宽字体小灰条）
+- **右键菜单**：「最近步骤（WorkBuddy）」子菜单，列出最近 8 步，新的在上
+
+细节处理：路径会自动相对当前项目显示（`src/xxx.js` 而不是一长串绝对路径）；命令会剥掉前导的 `cd xxx &&` 和 `PYTHONDONTWRITEBYTECODE=1` 这类环境变量前缀，否则只剩一个 `cd`，看不出在干嘛。
+
+不想要就在 `pet.config.json` 里设 `steps.enabled: false`。
+
 ### 气泡：告诉你「哪个 agent 在处理哪个问题」
 
 气泡是三段式的，颜色徽章区分 agent：

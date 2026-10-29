@@ -83,16 +83,21 @@ function createWatcher(config) {
       cwd: best.cwd || '',
       title: best.title || '',
       detail: best.detail || '',
+      // 当前这一步在干嘛 + 最近若干步（气泡显示最新一步，右键菜单列一串）
+      step: best.step || '',
+      steps: Array.isArray(best.steps) ? best.steps : [],
       online: !!best.online,
       at: now,
     }
 
+    // 步骤变了也要推送，否则气泡一直停在第一步不动
     const changed =
       !last ||
       last.phase !== snapshot.phase ||
       last.project !== snapshot.project ||
       last.detail !== snapshot.detail ||
-      last.source !== snapshot.source
+      last.source !== snapshot.source ||
+      last.step !== snapshot.step
 
     if (changed || now - lastSentAt > 10_000) {
       lastSentAt = now
@@ -149,6 +154,29 @@ function createWatcher(config) {
       for (const d of fs.readdirSync(CB_PROJECTS, { withFileTypes: true })) {
         if (d.isDirectory() && !d.name.startsWith('.')) dirs.push(path.join(CB_PROJECTS, d.name))
       }
+    } catch {
+      /* ignore */
+    }
+
+    // WorkBuddy 的会话记录在 ~/.workbuddy/projects/<项目>/<会话>.jsonl，
+    // 每一步 function_call 都往里追加 —— 要看到"每一步"就得监听这些目录。
+    try {
+      const wbRoot = path.join(home, '.workbuddy', 'projects')
+      const subs = fs
+        .readdirSync(wbRoot, { withFileTypes: true })
+        .filter((d) => d.isDirectory() && !d.name.startsWith('.'))
+        .map((d) => {
+          let m = 0
+          try {
+            m = fs.statSync(path.join(wbRoot, d.name)).mtimeMs
+          } catch {
+            /* ignore */
+          }
+          return { name: d.name, m }
+        })
+        .sort((a, b) => b.m - a.m)
+        .slice(0, 8) // 只挂最近动过的几个，别把几十个目录都挂上
+      for (const s of subs) dirs.push(path.join(wbRoot, s.name))
     } catch {
       /* ignore */
     }

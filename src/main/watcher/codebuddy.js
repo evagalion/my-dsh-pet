@@ -7,8 +7,10 @@
 const path = require('node:path')
 const os = require('node:os')
 const { newestProject, cleanProjectName, readHead, decidePhase } = require('./transcript')
+const { stepsOf, stepText } = require('./steps')
 
 const PROJECTS = path.join(os.homedir(), '.codebuddy', 'projects')
+const STEP_LIMIT = 12
 
 // 同 Cursor：停了 + 最后一句是 assistant = 这轮跑完了，别再挂着"整理中"
 const WORKING_MS = 20_000
@@ -37,6 +39,7 @@ function createCodeBuddyWatcher() {
       done: DONE_MS,
       cooldown: COOLDOWN_MS,
     })
+    const steps = stepsOf('codebuddy', s.file, { cwd: h.cwd, limit: STEP_LIMIT })
     return {
       source: 'codebuddy',
       online: gap < COOLDOWN_MS * 4,
@@ -45,6 +48,8 @@ function createCodeBuddyWatcher() {
       cwd: h.cwd || '',
       title: h.title || '',
       detail: '',
+      step: steps.length ? stepText(steps[0]) : '',
+      steps,
     }
   }
 

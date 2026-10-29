@@ -122,6 +122,22 @@ body {
   line-height: 1.4;
 }
 
+/* 当前这一步在干嘛：等宽字体更像"终端在跑"的感觉 */
+.bubble .step {
+  display: none;
+  margin-top: 3px;
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: #f2f1ee;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  color: #5a5955;
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .bubble .meta {
   display: none;
   margin-top: 2px;

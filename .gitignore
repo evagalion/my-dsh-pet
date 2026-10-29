@@ -6,3 +6,6 @@ dist/
 
 # AI 会话笔记，不属于交付物
 .workbuddy/
+
+# TTS 语音包（sherpa-onnx 二进制 + Kokoro 模型 + 试听样本，体积大，不入库）
+assets/tts/

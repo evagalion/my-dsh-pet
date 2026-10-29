@@ -20,8 +20,13 @@ const gap = Number(process.argv[3] || 3000)
       const ag = (DEFAULTS.agents && DEFAULTS.agents[r.source]) || {}
       console.log(
         `    ${(ag.label || r.source).padEnd(10)} ${String(r.phase).padEnd(10)} ` +
-          `项目=${r.project || '-'}  问题=${r.title || '-'}  文件=${r.detail || '-'}`
+          `项目=${r.project || '-'}  问题=${r.title || '-'}  文件=${r.detail || '-'}  当前=${r.step || '-'}`
       )
+      if ((r.steps || []).length) {
+        for (const st of r.steps.slice(0, 6)) {
+          console.log(`        · ${st.verb || st.tool}${st.target ? ' ' + st.target : ''}`)
+        }
+      }
     }
     if (i < times - 1) await new Promise((r) => setTimeout(r, gap))
   }

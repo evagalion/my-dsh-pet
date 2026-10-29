@@ -10,6 +10,7 @@
   const bubbleAgent = document.getElementById('bubble-agent')
   const bubbleWhat = document.getElementById('bubble-what')
   const bubbleMeta = document.getElementById('bubble-meta')
+  const bubbleStep = document.getElementById('bubble-step')
 
   let cfg = null
   let pool = null
@@ -18,6 +19,8 @@
   let phase = 'idle'
   let phaseTimer = null
   let bubbleTimer = null
+  let bubbleKey = '' // 当前气泡台词对应的「agent|档位」，用来防止步骤刷新时台词乱跳
+  let bubbleLine = ''
   let hovering = false
   let suppressHover = false
   let manualUntil = 0 // 手动点播后短暂屏蔽状态机，别刚点就被工作状态抢回去
@@ -112,6 +115,11 @@
     bubbleWhat.textContent = what ? clip(what, 26) : ''
     bubbleWhat.style.display = what ? 'inline' : 'none'
 
+    // 它这一步具体在干嘛（读哪个文件 / 跑哪条命令），没有就不占位置
+    const step = s.step || ''
+    bubbleStep.textContent = step ? '› ' + step : ''
+    bubbleStep.style.display = step ? 'block' : 'none'
+
     const pl = (cfg.phases[s.phase] || {}).label || ''
     const meta = pl + (s.detail ? ' · ' + clip(s.detail, 22) : '')
     bubbleMeta.textContent = meta
@@ -143,10 +151,16 @@
     if (phase !== 'idle') {
       const anim = pool.phase[phase]
       if (anim && (prev !== phase || s.force)) play(anim, { loop: true })
-      const texts = textsFor(s.source, phase)
-      const text = texts.length ? rand(texts) : (cfg.phases[phase] || {}).label || ''
+      // 步骤每变一次都会推一次状态，但台词不能跟着乱跳：
+      // 同一个 agent 的同一个档位一直用同一句，只有切档/换人才重抽。
+      const key = (s.source || '') + '|' + phase
+      if (key !== bubbleKey) {
+        bubbleKey = key
+        const texts = textsFor(s.source, phase)
+        bubbleLine = texts.length ? rand(texts) : (cfg.phases[phase] || {}).label || ''
+      }
       const transient = phase === 'success' || phase === 'error'
-      showBubble(text, s, transient ? 6000 : 0)
+      showBubble(bubbleLine, s, transient ? 6000 : 0)
       if (transient) {
         phaseTimer = setTimeout(() => {
           phase = 'idle'
@@ -155,6 +169,7 @@
         }, 6000)
       }
     } else if (prev !== 'idle' || s.force) {
+      bubbleKey = ''
       hideBubble()
       nextIdle()
     }
