@@ -1,0 +1,33 @@
+name: Release
+
+# 打 tag 推上来就自动建 release。
+# 用的是 Actions 自动注入的 GITHUB_TOKEN，不需要自己配任何密钥。
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch: # 也允许在网页上手动点一次
+
+# 新版仓库的 GITHUB_TOKEN 默认是只读，建 release 必须显式要写权限
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 建 release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          NOTES=".github/RELEASE-${TAG}.md"
+          TITLE="大肥鱼 ${TAG}"
+          if [ -f "$NOTES" ]; then
+            gh release create "$TAG" --title "$TITLE" --notes-file "$NOTES"
+          else
+            # 没写 notes 就交给 GitHub 按提交记录自动生成
+            gh release create "$TAG" --title "$TITLE" --generate-notes
+          fi
