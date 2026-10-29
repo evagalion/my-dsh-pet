@@ -308,6 +308,7 @@
   })
 
   function poke() {
+    api.click() // 点一下出声。音效在主进程播，不经过渲染层
     const a = rand(pool.clicks)
     play(a || pickWeighted(), {
       onEnd: () => nextIdle(),

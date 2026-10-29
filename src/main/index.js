@@ -244,6 +244,14 @@ function soundMenuLabel() {
   return '提示音：关'
 }
 
+// 同样必须同步：返回 Promise 会让整个菜单弹不出来
+function clickMenuLabel() {
+  const c = (cfg && cfg.sound && cfg.sound.click) || {}
+  const n = sfx.clickCount()
+  const on = c.enabled !== false
+  return `点击音效：${on ? `开（${n} 个随机）` : '关'}`
+}
+
 // 「它刚做了啥」：把会话记录里回溯出来的最近几步列出来（新的在上）
 function stepMenu() {
   if (!stepsOn()) return { label: '最近步骤（已关闭）', enabled: false }
@@ -335,6 +343,19 @@ async function buildMenuTemplate() {
           {
             label: '挑语音音色…（试听并复制配置）',
             click: () => shell.openPath(sfx.auditionPath()),
+          },
+        ]
+      : []),
+    ...(sfx.clickAvailable()
+      ? [
+          {
+            label: clickMenuLabel(),
+            click: () => {
+              cfg.sound.click = cfg.sound.click || {}
+              cfg.sound.click.enabled = cfg.sound.click.enabled === false
+              saveConfig(cfg)
+              if (cfg.sound.click.enabled !== false) sfx.click(cfg, true) // force：跳过节流，切完立刻听效果
+            },
           },
         ]
       : []),
@@ -506,6 +527,8 @@ app.whenReady().then(() => {
     } catch {}
   })
   ipcMain.on('pet:drag-end', () => persistPosition())
+  // 点一下鱼身：播随机点击音效。渲染层已经判过「没拖动」了，这里只管出声
+  ipcMain.on('pet:click', () => sfx.click(cfg))
   ipcMain.on('pet:hover', (_e, inside) => {
     if (!win || !cfg.pet.clickThrough) return
     win.setIgnoreMouseEvents(!inside, { forward: true })

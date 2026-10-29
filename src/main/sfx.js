@@ -352,6 +352,63 @@ function tone(cfg, source, event, force) {
   return true
 }
 
+// ---- 点击音效 ----
+// 音效包机制（参考 dsh-pet-indesktop）：assets/sfx/click/ 下所有音频都算一个「包」，
+// 点击时随机挑一个播。想加音效就往目录里丢 wav/mp3，不用改代码。
+const CLICK_EXTS = /\.(wav|mp3|m4a|ogg|flac|aac)$/i
+
+let lastClickAt = 0
+let lastClickFile = ''
+
+function clickDir() {
+  return path.join(ASSETS_DIR, 'sfx', 'click')
+}
+
+function clickFiles() {
+  try {
+    return fs
+      .readdirSync(clickDir())
+      .filter((f) => CLICK_EXTS.test(f))
+      .sort()
+  } catch (e) {
+    return []
+  }
+}
+
+// 摸一下/点一下时播。跟状态播报分开：这个要跟手，节流给得很短
+function click(cfg, force) {
+  const c = (cfg && cfg.sound && cfg.sound.click) || {}
+  if (c.enabled === false) return false
+  const files = clickFiles()
+  if (!files.length) return false
+
+  const now = Date.now()
+  const gap = c.minGapMs == null ? 200 : c.minGapMs
+  if (!force && now - lastClickAt < gap) return false // 连点时别糊成一片
+  lastClickAt = now
+
+  // 随机挑一个，尽量不连着放同一个
+  let pool = files
+  if (files.length > 1) {
+    const rest = files.filter((f) => f !== lastClickFile)
+    if (rest.length) pool = rest
+  }
+  const f = pool[Math.floor(Math.random() * pool.length)]
+  lastClickFile = f
+
+  const vol = String(c.volume == null ? 0.5 : c.volume)
+  execFile('afplay', ['-v', vol, path.join(clickDir(), f)], { timeout: 8000 }, () => {})
+  return true
+}
+
+function clickAvailable() {
+  return clickFiles().length > 0
+}
+
+function clickCount() {
+  return clickFiles().length
+}
+
 function gapOf(cfg) {
   const g = cfg && cfg.sound && cfg.sound.minGapMs
   return g == null ? 6000 : g
@@ -441,4 +498,7 @@ module.exports = {
   edgeAvailable,
   resetEdgeProbe,
   warmup,
+  click,
+  clickAvailable,
+  clickCount,
 }

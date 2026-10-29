@@ -52,6 +52,11 @@
       "waiting": "waiting",
       "thinking": false,
       "organizing": false
+    },
+    "click": {
+      "enabled": true,
+      "volume": 0.5,
+      "minGapMs": 200
     }
   },
   "weights": {

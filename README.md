@@ -108,6 +108,27 @@ AskUserQuestion → 问你      Skill → 用技能       show_widget → 画图
 
 **右键 → `各 agent 状态`** 会列出三路各自的实时状态（哪个在忙、忙哪个项目/问题），点某一路可以让鱼立刻切过去显示它——不会只看得到「最忙的那个」。
 
+### 点击音效
+
+点一下鱼身（按下后**没拖动**才算，拖走/扔出去不响）会播一个随机音效，同时随机播一段「点击回应」动画 + 冒一句碎碎念。
+
+音效是**合成的**（`npm run sfx:click` → `assets/sfx/click/`，4 个共 76KB）：
+
+| 文件 | 时长 | 手感 |
+| --- | --- | --- |
+| `bounce.wav` | 215ms | Q 弹，最「果冻」，默认主力 |
+| `pop.wav` | 155ms | 啵，短促上扬，像戳破气泡 |
+| `boing.wav` | 300ms | 弹簧，下扫再弹上去再落回来 |
+| `tick.wav` | 95ms | 咔，极短极脆，连点不糊 |
+
+合成思路参考 [MerZlin/dsh-pet-indesktop](https://github.com/MerZlin/dsh-pet-indesktop) 的 `scripts/make_click_sound.py`：**主弹（被按下去）+ 一小段更轻更短的回弹（弹起来）**，两段叠出果冻感。改了一处——扫频用真正的相位积分（`ph += 2π·f/RATE`）而不是 `sin(2π·f(t)·t)`，后者瞬时频率是 `f(t) + t·f'(t)`，下扫会扫过头、音高飘。
+
+**音效包机制**：`assets/sfx/click/` 下所有音频都算一个包，点击时随机挑一个，**想加自己的音效直接往里丢 wav/mp3 就行，不用改代码**（会自动避开连续两次放同一个）。
+
+配置在 `sound.click`：`enabled` / `volume`（默认 0.5）/ `minGapMs`（默认 200，连点时不糊成一片）。右键菜单 **「点击音效：开/关」** 可切换，切完立刻响一声确认。
+
+> 音效走主进程 `afplay`，不经过渲染层——跟状态播报一样，窗口没焦点也响，不受 Chromium 自动播放策略限制。
+
 ### 提示音 / 提示语音
 
 默认 **语音播报**（可爱萝莉音）：状态一变就用系统 TTS 念一句，**每个 agent 音色不同**，不用看屏幕也知道是谁在动。
@@ -200,12 +221,14 @@ AskUserQuestion → 问你      Skill → 用技能       show_widget → 画图
 ├── assets/
 │   ├── webm/            # 106 段透明动画（52MB，来自 dsh-pet）
 │   ├── sfx/             # 12 个提示音（600KB，make-sfx.js 合成）
+│   │   └── click/       # 4 个点击音效（76KB，make-click-sfx.js 合成，可自由增删）
 │   ├── tts/             # edge-audition.html 试听页 + 9 个音色样本（400KB）
 │   ├── tray.png         # 托盘图标，scripts/make-icon.js 生成
 │   └── icon.icns        # app 图标
 ├── scripts/
 │   ├── make-icon.js     # 手写 zlib 生成 PNG，不引图形库
 │   ├── make-sfx.js      # 手写 WAV 合成提示音，不引音频库
+│   ├── make-click-sfx.js # 手写 WAV 合成点击音效（扫频 + 回弹的 Q 弹感）
 │   ├── warm-voice.js    # 预热语音缓存，让播报永久离线
 │   └── probe.js         # 探测层命令行验证
 └── src/

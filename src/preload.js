@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('petAPI', {
   moveBy: (dx, dy) => ipcRenderer.send('pet:move-by', dx, dy),
   throw: (vx, vy) => ipcRenderer.send('pet:throw', vx, vy),
   dragEnd: () => ipcRenderer.send('pet:drag-end'),
+  click: () => ipcRenderer.send('pet:click'),
   openMenu: () => ipcRenderer.send('pet:menu'),
   hover: (inside) => ipcRenderer.send('pet:hover', inside),
   walk: (dist, ms) => ipcRenderer.send('pet:walk', dist, ms),
