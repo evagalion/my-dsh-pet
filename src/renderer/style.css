@@ -20,13 +20,10 @@ body {
   inset: 0;
 }
 
-#hit {
-  position: absolute;
-  left: 20%;
-  right: 20%;
-  bottom: 3%;
-  height: 62%;
-  pointer-events: none;
+/* 鼠标穿透开启时鱼淡一点，不然整窗透明、也不响应鼠标，开了跟没开看不出区别 */
+body.through #stage {
+  opacity: 0.55;
+  transition: opacity 0.25s ease;
 }
 
 .pet {
@@ -154,6 +151,9 @@ body {
     animation: none;
   }
   .bubble {
+    transition: none;
+  }
+  body.through #stage {
     transition: none;
   }
 }

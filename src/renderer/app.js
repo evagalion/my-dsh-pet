@@ -3,7 +3,6 @@
 ;(function () {
   const api = window.petAPI
   const stage = document.getElementById('stage')
-  const hit = document.getElementById('hit')
   const vids = [document.getElementById('v-a'), document.getElementById('v-b')]
   const bubble = document.getElementById('bubble')
   const bubbleText = document.getElementById('bubble-text')
@@ -21,8 +20,6 @@
   let bubbleTimer = null
   let bubbleKey = '' // 当前气泡台词对应的「agent|档位」，用来防止步骤刷新时台词乱跳
   let bubbleLine = ''
-  let hovering = false
-  let suppressHover = false
   let manualUntil = 0 // 手动点播后短暂屏蔽状态机，别刚点就被工作状态抢回去
   let fullness = null // 饱腹度，主进程给的（开机一次 + 每次喂食后更新）
   // 心情快照：mood=最近顺不顺，sulking=连续失败正在赌气，bond=亲密度
@@ -258,7 +255,6 @@
     })
     if (e.button !== 0) return
     dragging = true
-    suppressHover = true
     downAt = performance.now()
     lastX = typeof e.screenX === 'number' ? e.screenX : null
     lastY = typeof e.screenY === 'number' ? e.screenY : null
@@ -317,7 +313,6 @@
     if (!dragging) return
     dbg('pointerup', { movedDist, vel })
     dragging = false
-    suppressHover = false
     try {
       stage.releasePointerCapture(e.pointerId)
     } catch (err) {
@@ -343,26 +338,6 @@
   stage.addEventListener('contextmenu', (e) => {
     e.preventDefault()
     api.openMenu()
-  })
-
-  function updateHover(e) {
-    const r = hit.getBoundingClientRect()
-    const inside =
-      e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom
-    if (inside !== hovering) {
-      hovering = inside
-      api.hover(inside)
-    }
-  }
-
-  stage.addEventListener('mousemove', updateHover)
-  window.addEventListener('mousemove', updateHover)
-
-  stage.addEventListener('pointerleave', () => {
-    if (hovering) {
-      hovering = false
-      api.hover(false)
-    }
   })
 
   function poke() {
@@ -481,6 +456,11 @@
     if (d.line) showBubble(d.line, null, 5000)
   }
 
+  // 穿透开启时鱼淡一点。不然整窗透明、鼠标也不响应，开了跟没开看不出区别
+  function onClickThrough(on) {
+    document.body.classList.toggle('through', !!on)
+  }
+  api.on('pet:clickthrough', onClickThrough)
   api.on('pet:liedown', onLieDown)
   api.on('pet:stuck', onStuck)
   api.on('pet:routine', playOnce)
@@ -547,6 +527,8 @@
     if (typeof boot.fullness === 'number') fullness = boot.fullness
     if (boot.mood) moodSnap = boot.mood
     if (boot.occasion) occasion = boot.occasion
+    // 开机时窗口还没起来，applyClickThrough 那次 send 收不到，所以穿透状态走 boot 下发
+    if (boot.clickThrough) document.body.classList.add('through')
 
     // 心情相关的分支平时要等触发条件（连续失败 / 摸鱼 8 分钟 / 卡 5 分钟）才跑得到，
     // 真跑起来才发现报错就晚了。自检模式下把每条路径都走一遍，报错直接报出来。
@@ -577,6 +559,11 @@
         occasion = { name: '中秋节', anims: ['中秋赏月吃月饼'], kind: 'festival' }
         cfg.calendar = Object.assign({}, cfg.calendar, { chance: { festival: 1, season: 1 } })
         nextIdle() // 过节时待机：应该播「中秋赏月吃月饼」
+        // 鼠标穿透：开了之后鱼要变淡，否则肉眼看不出开关有没有生效
+        onClickThrough(true)
+        const throughOn = document.body.classList.contains('through')
+        onClickThrough(false)
+        const throughOff = document.body.classList.contains('through')
         probe = {
           poke: afterPoke,
           sulkLine: afterSulk,
@@ -585,6 +572,7 @@
           routineAnim: nameOf(routineAnim),
           digestLine,
           occasionAnim: nameOf(vids[active].src),
+          through: throughOn === true && throughOff === false,
         }
       } catch (e) {
         probe = { error: String((e && e.message) || e) }

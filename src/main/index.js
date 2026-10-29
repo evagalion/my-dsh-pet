@@ -123,11 +123,27 @@ function createWindow() {
   }
 }
 
-// 鼠标穿透：整窗不接收事件，只有指针挪到宠物身上时才恢复接收。
-// 开着很优雅，但一旦 hover 判定失灵就完全点不动，所以默认关闭，右键菜单可切换。
+// 鼠标穿透：开启后整窗彻底不接收鼠标事件，鱼变成纯装饰，鼠标直接穿过去点到下面的窗口。
+//
+// 这里**故意不做 hover 恢复**。之前的实现是「鼠标挪到鱼身上就恢复可点击」，听起来贴心，
+// 实际等于没开：鼠标不在鱼身上时穿不穿透都没区别（你本来也点不到鱼），而鼠标一到鱼身上
+// 又被恢复了。而且 hover 状态跟开关不同步——切换瞬间鼠标正好在鱼身上的话，之后就再也
+// 收不到 hover 上报，行为完全取决于切换时鼠标在哪。
+//
+// 代价是开启后右键菜单也唤不出来，所以开关在托盘菜单里也放了一份，随时能关回来。
 function applyClickThrough() {
   if (!win) return
-  win.setIgnoreMouseEvents(!!cfg.pet.clickThrough, { forward: true })
+  const on = !!cfg.pet.clickThrough
+  win.setIgnoreMouseEvents(on, { forward: false })
+  // 开了之后肉眼看不出区别（鱼本来就是透明的），让鱼淡一点当反馈
+  win.webContents.send('pet:clickthrough', on)
+}
+
+function toggleClickThrough() {
+  cfg.pet.clickThrough = !cfg.pet.clickThrough
+  saveConfig(cfg)
+  applyClickThrough()
+  if (tray && tray.rebuild) tray.rebuild() // 托盘菜单上的文案要跟着变
 }
 
 function persistPosition() {
@@ -329,6 +345,10 @@ function feedMenuItems() {
   ]
 }
 
+function clickThroughLabel() {
+  return cfg.pet.clickThrough ? '鼠标穿透：开（点不到我，从托盘图标关）' : '鼠标穿透：关（可以拖我）'
+}
+
 // 同样必须同步：返回 Promise 会让整个菜单弹不出来
 function clickMenuLabel() {
   const c = (cfg && cfg.sound && cfg.sound.click) || {}
@@ -449,12 +469,8 @@ async function buildMenuTemplate() {
         ]
       : []),
     {
-      label: cfg.pet.clickThrough ? '鼠标穿透：开（点不到我）' : '鼠标穿透：关（可以拖我）',
-      click: () => {
-        cfg.pet.clickThrough = !cfg.pet.clickThrough
-        saveConfig(cfg)
-        applyClickThrough()
-      },
+      label: clickThroughLabel(),
+      click: () => toggleClickThrough(),
     },
     {
       label: '重载配置',
@@ -655,6 +671,7 @@ app.whenReady().then(() => {
       fullness: feed.fullness(cfg),
       mood: mood.snapshot(cfg),
       occasion: calendar.occasionOf(cfg),
+      clickThrough: !!cfg.pet.clickThrough,
       coins: coins.snapshot(cfg),
       digest: digest.today(cfg),
       selftest: SELFTEST,
@@ -714,10 +731,6 @@ app.whenReady().then(() => {
   ipcMain.on('pet:click', () => sfx.click(cfg))
   // 戳它 / 喂它都涨亲密度。渲染层戳的时候顺手报一下
   ipcMain.on('pet:bond', (_e, kind) => bumpBond(kind === 'feed' ? 'feed' : 'poke'))
-  ipcMain.on('pet:hover', (_e, inside) => {
-    if (!win || !cfg.pet.clickThrough) return
-    win.setIgnoreMouseEvents(!inside, { forward: true })
-  })
   ipcMain.on('pet:menu', () => {
     if (!win) return
     Promise.resolve()
@@ -732,6 +745,9 @@ app.whenReady().then(() => {
     reset: () => win && resetPosition(),
     openWorkBuddy: () => execFile('open', ['-a', 'WorkBuddy'], () => {}),
     openCursor: () => execFile('open', ['-a', 'Cursor'], () => {}),
+    // 穿透开着的时候右键菜单唤不出来，托盘是唯一的后悔药
+    clickThroughLabel,
+    toggleClickThrough,
   })
 
   watcher = createWatcher(cfg)
