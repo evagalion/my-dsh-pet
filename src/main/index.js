@@ -12,6 +12,7 @@ const { createTray } = require('./tray')
 const { createFlight, step } = require('../shared/physics')
 const { classify, menuGroups } = require('../shared/animations')
 const sfx = require('./sfx')
+const feed = require('./feed')
 
 protocol.registerSchemesAsPrivileged([
   { scheme: 'pet', privileges: { bypassCSP: true, supportFetchAPI: true, stream: true } },
@@ -244,6 +245,36 @@ function soundMenuLabel() {
   return '提示音：关'
 }
 
+// 喂鱼相关菜单项。饱腹度关掉时返回空数组（展开运算符会把它吃掉）
+function feedMenuItems() {
+  const v = feed.fullness(cfg)
+  if (v == null) return []
+  const pct = Math.round(v)
+  const food = feed.pickFood(cfg)
+  const occasion = feed.occasionOf(cfg)
+  const label = occasion
+    ? `喂点东西（今天${occasion}，想吃${food.replace(/^吃/, '')}）`
+    : `喂点东西（现在想吃${food.replace(/^吃/, '')}）`
+  return [
+    {
+      label,
+      click: () => {
+        const r = feed.feed(cfg, food)
+        if (!r || !win) return
+        const mood = feed.moodOf(cfg, r.after)
+        win.webContents.send('pet:feed', {
+          food: r.food,
+          fullness: r.after,
+          mood,
+          line: feed.lineFor(cfg, mood),
+        })
+        sfx.click(cfg, true) // 喂食也出一声，跟手
+      },
+    },
+    { label: `饱腹度：${pct}%`, enabled: false },
+  ]
+}
+
 // 同样必须同步：返回 Promise 会让整个菜单弹不出来
 function clickMenuLabel() {
   const c = (cfg && cfg.sound && cfg.sound.click) || {}
@@ -299,6 +330,7 @@ async function buildMenuTemplate() {
     },
     { type: 'separator' },
     { label: '摸一下', click: () => win.webContents.send('pet:poke') },
+    ...feedMenuItems(),
     actionMenu(),
     { label: '它在干嘛？', click: () => speakNow() },
     { label: '各 agent 状态（点开看各自在忙啥）', submenu: statusItems },
@@ -475,7 +507,7 @@ app.whenReady().then(() => {
   ipcMain.handle('pet:boot', () => {
     const assets = listAssets()
     pools = classify(assets, cfg)
-    return { config: cfg, assets, pools, root: ROOT }
+    return { config: cfg, assets, pools, root: ROOT, fullness: feed.fullness(cfg) }
   })
 
   // Retina 下 movementX/Y 是小数（如 -8.5），setPosition 只接受整数，

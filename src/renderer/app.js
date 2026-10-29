@@ -24,6 +24,7 @@
   let hovering = false
   let suppressHover = false
   let manualUntil = 0 // 手动点播后短暂屏蔽状态机，别刚点就被工作状态抢回去
+  let fullness = null // 饱腹度，主进程给的（开机一次 + 每次喂食后更新）
 
   const rand = (arr) => (arr && arr.length ? arr[Math.floor(Math.random() * arr.length)] : null)
 
@@ -80,6 +81,21 @@
 
   function nextIdle() {
     if (phase !== 'idle') return
+    // 饿了就时不时自己嘟囔一句，不用等到你去点菜单才知道
+    const f = cfg.feed || {}
+    const hungryAt = f.hungryAt == null ? 25 : f.hungryAt
+    if (
+      f.enabled !== false &&
+      fullness != null &&
+      fullness <= hungryAt &&
+      pool.whisper.length &&
+      Math.random() < 0.45
+    ) {
+      play(rand(pool.whisper), {})
+      const lines = (f.lines || {}).hungry
+      showBubble(rand(lines) || '肚子饿了…', null, 2600)
+      return
+    }
     play(pickWeighted(), {})
   }
 
@@ -339,6 +355,42 @@
     }
   }
 
+  // 喂食：先把食物从角落飘到鱼嘴边，再播"吃XX"动画
+  function onFeed(d) {
+    if (!d || !d.food) return
+    fullness = d.fullness
+    manualUntil = Date.now() + 9000
+    clearTimeout(phaseTimer)
+    hideBubble()
+    phase = 'idle'
+    if (pool.fun.indexOf(d.food) < 0) {
+      // 素材里没这段（比如改名了），退化成随便播一个，别卡住
+      play(pickWeighted(), { onEnd: () => nextIdle() })
+      return
+    }
+    flyIn(d.food)
+    setTimeout(() => {
+      play(d.food, { onEnd: () => nextIdle() })
+      showBubble(d.line || '', null, 2600)
+    }, 520)
+  }
+
+  // 食物标签：从右上角飘到中间，再淡掉。纯 CSS 过渡，不用新素材
+  let foodTimer = null
+  function flyIn(foodName) {
+    const el = document.getElementById('food')
+    if (!el) return
+    clearTimeout(foodTimer)
+    el.textContent = foodName.replace(/^吃/, '')
+    el.classList.remove('gone')
+    el.classList.add('show')
+    foodTimer = setTimeout(() => {
+      el.classList.add('gone')
+      foodTimer = setTimeout(() => el.classList.remove('show', 'gone'), 400)
+    }, 620)
+  }
+
+  api.on('pet:feed', onFeed)
   api.on('pet:play', playByName)
   api.on('pet:walk-done', () => {
     manualUntil = Date.now() + 2500
@@ -388,6 +440,7 @@
   api.boot().then((boot) => {
     cfg = boot.config
     pool = boot.pools
+    if (typeof boot.fullness === 'number') fullness = boot.fullness
     const first = rand(pool.idle) || rand(pool.fun) || (boot.assets || [])[0]
     play(first, {})
     const v = vids[active]

@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('petAPI', {
     const valid = [
       'pet:state',
       'pet:poke',
+      'pet:feed',
       'pet:landed',
       'pet:speak',
       'pet:play',

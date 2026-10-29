@@ -157,3 +157,39 @@ body {
     transition: none;
   }
 }
+
+/* 喂食：食物标签从右上角飘到鱼嘴边，再淡掉。纯 CSS，不额外用素材 */
+#food {
+  position: absolute;
+  left: 50%;
+  top: 52%;
+  z-index: 5;
+  padding: 3px 9px;
+  border-radius: 11px;
+  background: #fffdf7;
+  color: #8a5a2b;
+  border: 1px solid #ecd9bd;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transform: translate(120px, -110px) scale(0.55) rotate(8deg);
+  transition: transform 0.5s cubic-bezier(0.3, 0.9, 0.4, 1.15), opacity 0.28s linear;
+}
+
+#food.show {
+  opacity: 1;
+  transform: translate(-8px, 6px) scale(1) rotate(-3deg);
+}
+
+#food.gone {
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #food {
+    transition: opacity 0.2s linear;
+    transform: translate(-8px, 6px);
+  }
+}
