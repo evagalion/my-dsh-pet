@@ -167,7 +167,87 @@
       "cooldownMs": 3600000,
       "anim": "超大伸懒腰",
       "line": "坐太久啦，起来动一动吧"
+    },
+    "idlePlay": {
+      "steps": [
+        {
+          "afterMin": 3,
+          "anims": ["超大伸懒腰", "哈欠连天"],
+          "lines": ["好闲呀…", "没事干，伸个懒腰"]
+        },
+        {
+          "afterMin": 5,
+          "anims": [
+            "原地专心玩魔方",
+            "踢毽子",
+            "荡秋千",
+            "撸猫",
+            "抽陀螺",
+            "骑木马",
+            "下五子棋",
+            "原地蹲下玩玩具汽车"
+          ],
+          "lines": ["自己找点乐子~", "反正也没事干", "玩一会儿好了"]
+        }
+      ]
     }
+  },
+  "achievements": {
+    "enabled": true,
+    "items": [
+      {
+        "key": "streak5",
+        "type": "streak",
+        "at": 5,
+        "label": "五连顺",
+        "desc": "连续成功 5 次",
+        "anim": "凭空生花",
+        "line": "手气来了，停不下来~"
+      },
+      {
+        "key": "streak10",
+        "type": "streak",
+        "at": 10,
+        "label": "十连顺",
+        "desc": "连续成功 10 次",
+        "anim": "蓝鲸现世",
+        "line": "今天我也太强了吧"
+      },
+      {
+        "key": "day20",
+        "type": "dayTotal",
+        "at": 20,
+        "label": "今日高产",
+        "desc": "单日跑满 20 轮",
+        "anim": "动物环绕",
+        "line": "今天干了不少活呢"
+      },
+      {
+        "key": "coins500",
+        "type": "coins",
+        "at": 500,
+        "label": "小富婆",
+        "desc": "小金库破 500",
+        "anim": "余额-钱袋满溢",
+        "line": "攒了这么多啦"
+      },
+      {
+        "key": "bond100",
+        "type": "bond",
+        "at": 100,
+        "label": "形影不离",
+        "desc": "亲密度满",
+        "anim": "蝴蝶蜜蜂环绕头顶开花",
+        "line": "最喜欢你了"
+      }
+    ]
+  },
+  "hover": {
+    "enabled": true,
+    "afterMs": 1200,
+    "cooldownMs": 30000,
+    "anim": "点击回应-害羞惊讶",
+    "lines": ["盯着我干嘛呀…", "再看我就要害羞了", "有什么事吗~"]
   },
   "coins": {
     "enabled": true,

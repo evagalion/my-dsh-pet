@@ -18,6 +18,7 @@ const calendar = require('./calendar')
 const routine = require('./routine')
 const coins = require('./coins')
 const digest = require('./digest')
+const achieve = require('./achieve')
 
 const pick = (arr) => (arr && arr.length ? arr[Math.floor(Math.random() * arr.length)] : null)
 
@@ -284,6 +285,34 @@ function coinsMenuItems() {
   ]
 }
 
+// 成就：判定需要的四个数字分散在 mood / coins / digest 里，这里凑齐了一次性喂进去
+function checkAchievements() {
+  const now = Date.now()
+  const day = digest.today(cfg) || {}
+  const got = achieve.check(cfg, {
+    streak: mood.trailingSuccesses(cfg, now),
+    dayTotal: day.n || 0,
+    dayOk: day.ok || 0,
+    coins: coins.value(cfg) || 0,
+    bond: mood.snapshot(cfg).bond || 0,
+  })
+  for (const it of got) {
+    if (!win) break
+    win.webContents.send('pet:achieve', { anim: it.anim, line: it.line || '', label: it.label || '' })
+    sfx.speakText(cfg, it.line || `达成成就：${it.label || ''}`, true)
+  }
+}
+
+// 成就进度：点开看解锁了哪些
+function achieveMenuItems() {
+  const s = achieve.snapshot(cfg)
+  if (!s.enabled || !s.total) return []
+  const sub = s.unlocked.length
+    ? s.unlocked.map((u) => ({ label: `${u.label} ✓`, enabled: false }))
+    : [{ label: '还没解锁，接着加油', enabled: false }]
+  return [{ label: `成就（${s.done}/${s.total}）`, submenu: sub }]
+}
+
 // 每日回顾：点一下念一句今天的战报
 function digestMenuItems() {
   const t = digest.today(cfg)
@@ -407,6 +436,7 @@ async function buildMenuTemplate() {
     ...feedMenuItems(),
     ...coinsMenuItems(),
     ...digestMenuItems(),
+    ...achieveMenuItems(),
     ...moodMenuItems(),
     actionMenu(),
     { label: '它在干嘛？', click: () => speakNow() },
@@ -537,6 +567,7 @@ function resetPosition() {
 function bumpBond(kind) {
   mood.bumpBond(cfg, kind)
   pushMood()
+  checkAchievements() // 亲密度可能刚好到 100
 }
 
 // 心情快照变了才推。亲密度是按时间戳现算的，每秒推一次纯属浪费
@@ -635,6 +666,7 @@ function pushState(s, force) {
         })
       }
       digest.note(cfg, s.phase, s.project || s.title)
+      checkAchievements()
     }
     pushMood()
   } catch {

@@ -12,12 +12,16 @@
 
 const clampHour = (h) => ((h % 24) + 24) % 24
 const dayKey = (d) => `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`
+const pick = (arr) => (arr && arr.length ? arr[Math.floor(Math.random() * arr.length)] : null)
 
 // 冷却只放在内存里：桌宠一关就没了，重启后重新计时，这符合直觉
 let morningOn = ''
 let lateFiredAt = 0
 let sitFiredAt = 0
 let workSince = 0
+let idleSince = 0
+// 本轮摸鱼里已经放过哪几档（下标），回去干活就清空，下次摸鱼从头来
+const idleDone = new Set()
 
 function watch(cfg, all, now) {
   const r = (cfg && cfg.routine) || {}
@@ -34,6 +38,35 @@ function watch(cfg, all, now) {
     if (!workSince || now < workSince) workSince = now
   } else {
     workSince = 0
+  }
+
+  // 摸鱼时长（同上，倒退要重置）。idlePlay 的阶梯挂在它上面
+  if (!busy && list.length) {
+    if (!idleSince || now < idleSince) idleSince = now
+  } else {
+    idleSince = 0
+    idleDone.clear()
+  }
+
+  // 越闲越放飞：先伸个懒腰，再自己找玩具。8 分钟那档的「原地小憩沉眠」
+  // 在 mood.js 里（躺平），这里只管 8 分钟之前的两档，不跟它打架
+  const steps = (r.idlePlay && r.idlePlay.steps) || []
+  if (idleSince) {
+    const min = (now - idleSince) / 60000
+    for (let i = 0; i < steps.length; i++) {
+      const s = steps[i]
+      if (!s || !s.anims || !s.anims.length) continue
+      if (idleDone.has(i)) continue
+      if (min >= (s.afterMin || 0)) {
+        idleDone.add(i)
+        return {
+          key: 'idlePlay',
+          anim: pick(s.anims),
+          line: pick(s.lines) || '',
+          minutes: Math.round(min),
+        }
+      }
+    }
   }
 
   // 深夜还在跑 —— 这条优先，凌晨两点的「该动一动了」不如「我不行了」

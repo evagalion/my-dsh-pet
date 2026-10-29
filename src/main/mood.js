@@ -74,18 +74,27 @@ function note(cfg, phase) {
   return true
 }
 
-// 末尾连续失败了几次（中间夹了成功就断）
-function trailingErrors(cfg, now) {
+// 末尾连续出现几次某种结果（中间夹了另一种就断）
+function trailing(cfg, now, kind) {
   const win = cfgOf(cfg, 'mood').windowMs || 1800000
   const outs = load()
     .outcomes.filter((o) => now - o.t < win)
     .sort((a, b) => a.t - b.t)
   let n = 0
   for (let i = outs.length - 1; i >= 0; i--) {
-    if (outs[i].kind === 'error') n++
+    if (outs[i].kind === kind) n++
     else break
   }
   return n
+}
+
+function trailingErrors(cfg, now) {
+  return trailing(cfg, now, 'error')
+}
+
+// 连胜数，成就系统里的「五连顺 / 十连顺」用它判定
+function trailingSuccesses(cfg, now) {
+  return trailing(cfg, now, 'success')
 }
 
 function scoreOf(cfg, now) {
@@ -231,4 +240,14 @@ function snapshot(cfg) {
   }
 }
 
-module.exports = { note, watch, snapshot, bumpBond, bondValue, bondLevel, isSulking }
+module.exports = {
+  note,
+  watch,
+  snapshot,
+  bumpBond,
+  bondValue,
+  bondLevel,
+  isSulking,
+  trailingErrors,
+  trailingSuccesses,
+}

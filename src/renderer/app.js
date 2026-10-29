@@ -257,9 +257,39 @@
     if (api.debug) api.debug({ ev, ...extra })
   }
 
+  // 悬停反应：鼠标在鱼身上停住一会儿它会害羞。
+  // 命中区收窄到 128x146 之后这个才有意义——之前整个窗口都是命中区，hover 没有语义
+  let hoverTimer = null
+  let hoverFiredAt = 0
+  // 抽成单独的函数，自检里能跳过定时器直接验证它播的对不对
+  function fireHover() {
+    const h = cfg.hover || {}
+    if (h.enabled === false) return
+    // 只在闲着的时候回应：正播工作状态动画就别抢戏
+    if (phase !== 'idle' || Date.now() < manualUntil) return
+    if (Date.now() - hoverFiredAt < (h.cooldownMs || 30000)) return
+    hoverFiredAt = Date.now()
+    play(h.anim || '点击回应-害羞惊讶', { onEnd: () => nextIdle() })
+    showBubble(rand(h.lines) || '盯着我干嘛呀…', null, 2600)
+  }
+  function armHover() {
+    const h = cfg.hover || {}
+    if (h.enabled === false) return
+    clearTimeout(hoverTimer)
+    hoverTimer = setTimeout(fireHover, h.afterMs || 1200)
+  }
+  function cancelHover() {
+    clearTimeout(hoverTimer)
+  }
+
+  hit.addEventListener('pointerenter', armHover)
+  hit.addEventListener('pointermove', armHover) // 还在动就重新计时，停住才算
+  hit.addEventListener('pointerleave', cancelHover)
+
   // 事件挂在命中区而不是铺满窗口的 #stage 上：素材四周是空的透明像素，
   // 挂 stage 的话点空白处也能把鱼拖走
   hit.addEventListener('pointerdown', (e) => {
+    cancelHover()
     dbg('pointerdown', {
       button: e.button,
       movementX: e.movementX,
@@ -479,6 +509,8 @@
   api.on('pet:stuck', onStuck)
   api.on('pet:routine', playOnce)
   api.on('pet:gift', playOnce)
+  // 达成成就：播大招素材（蓝鲸现世 / 凭空生花 / 动物环绕…）
+  api.on('pet:achieve', playOnce)
   // 今天过什么节，主进程跨天时会重推
   api.on('pet:occasion', (d) => {
     occasion = d || null
@@ -575,6 +607,20 @@
         occasion = { name: '中秋节', anims: ['中秋赏月吃月饼'], kind: 'festival' }
         cfg.calendar = Object.assign({}, cfg.calendar, { chance: { festival: 1, season: 1 } })
         nextIdle() // 过节时待机：应该播「中秋赏月吃月饼」
+        // 必须当场取：后面还有几步会接着播别的，等构造 probe 对象时 src 已经被覆盖了
+        const occasionAnim = nameOf(vids[active].src)
+        // 成就：播大招素材
+        manualUntil = 0
+        phase = 'idle'
+        playOnce({ anim: '蓝鲸现世', line: '今天我也太强了吧' })
+        const achieveAnim = nameOf(vids[active].src)
+        // 悬停反应：跳过定时器直接触发，验证它播的是「害羞惊讶」
+        manualUntil = 0
+        phase = 'idle'
+        hoverFiredAt = 0
+        fireHover()
+        const hoverAnim = nameOf(vids[active].src)
+        const hoverLine = bubbleText.textContent
         // 鼠标穿透：开了之后鱼要变淡，否则肉眼看不出开关有没有生效
         onClickThrough(true)
         const throughOn = document.body.classList.contains('through')
@@ -598,9 +644,12 @@
           sadAnim: nameOf(sadAnim),
           routineAnim: nameOf(routineAnim),
           digestLine,
-          occasionAnim: nameOf(vids[active].src),
+          occasionAnim,
           through: throughOn === true && throughOff === false,
           hit: hitInfo,
+          achieveAnim,
+          hoverAnim,
+          hoverLine,
         }
       } catch (e) {
         probe = { error: String((e && e.message) || e) }

@@ -23,6 +23,7 @@ contextBridge.exposeInMainWorld('petAPI', {
       'pet:stuck',
       'pet:routine',
       'pet:clickthrough',
+      'pet:achieve',
       'pet:gift',
       'pet:digest',
       'pet:occasion',
