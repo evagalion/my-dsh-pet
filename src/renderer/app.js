@@ -31,6 +31,37 @@
   let occasion = null // 今天过什么节（含应季动作），主进程下发，一天一变
 
   const rand = (arr) => (arr && arr.length ? arr[Math.floor(Math.random() * arr.length)] : null)
+
+  // 台词用的「洗牌袋」：一轮里不重复，抽完才重新洗。
+  // 纯随机的问题不是句子少，是**体感重复**——5 句话随机也会连着说同一句，
+  // 抽袋能保证 48 句里至少轮过一遍才可能重复。
+  // 每个 key 一个袋子，key 相同才共享（比如「戳它的闲聊」和「悬停台词」互不干扰）
+  const bags = {}
+  function pickLine(arr, key) {
+    const list = (arr || []).filter((s) => s != null && s !== '')
+    if (!list.length) return ''
+    if (list.length === 1) return list[0]
+    const sig = list.join('')
+    let b = bags[key]
+    if (!b || b.sig !== sig) b = bags[key] = { sig, pool: [], last: '' }
+    if (!b.pool.length) {
+      b.pool = list.slice()
+      for (let i = b.pool.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1))
+        const t = b.pool[i]
+        b.pool[i] = b.pool[j]
+        b.pool[j] = t
+      }
+      // 跨轮接缝：新袋子的第一张别跟上个袋子的最后一张撞上
+      if (b.last && b.pool.length > 1 && b.pool[0] === b.last) {
+        const t = b.pool[0]
+        b.pool[0] = b.pool[1]
+        b.pool[1] = t
+      }
+    }
+    b.last = b.pool.shift()
+    return b.last
+  }
   // pet://xxx.webm → 素材名（自检里用来断言播的到底是哪一段）
   const nameOf = (src) =>
     decodeURIComponent(String(src || '').replace(/^pet:\/*/i, '')).replace(/\.webm$/, '')
@@ -126,7 +157,7 @@
         const a = rand(anims)
         play(a, { onEnd: () => nextIdle() })
         if (moodSnap.mood === 'sad' && Math.random() < 0.5) {
-          showBubble(rand((m.lines || {}).sad) || '唉…', null, 2600)
+          showBubble(pickLine((m.lines || {}).sad, 'mood-sad') || '唉…', null, 2600)
         }
         return
       }
@@ -143,7 +174,7 @@
     ) {
       play(rand(pool.whisper), {})
       const lines = (f.lines || {}).hungry
-      showBubble(rand(lines) || '肚子饿了…', null, 2600)
+      showBubble(pickLine(lines, 'feed-hungry') || '肚子饿了…', null, 2600)
       return
     }
     play(pickWeighted(), {})
@@ -245,7 +276,9 @@
       if (key !== bubbleKey) {
         bubbleKey = key
         const texts = textsFor(s.source, phase)
-        bubbleLine = texts.length ? rand(texts) : (cfg.phases[phase] || {}).label || ''
+        bubbleLine = texts.length
+          ? pickLine(texts, `phase:${s.source || ''}:${phase}`)
+          : (cfg.phases[phase] || {}).label || ''
       }
       const transient = phase === 'success' || phase === 'error'
       // 提醒类台词（卡太久）在几秒内优先级最高，不然每秒一次的状态推送会把它冲掉
@@ -293,7 +326,7 @@
     if (Date.now() - hoverFiredAt < (h.cooldownMs || 30000)) return
     hoverFiredAt = Date.now()
     play(h.anim || '点击回应-害羞惊讶', { onEnd: () => nextIdle() })
-    showBubble(rand(h.lines) || '盯着我干嘛呀…', null, 2600)
+    showBubble(pickLine(h.lines, 'hover') || '盯着我干嘛呀…', null, 2600)
   }
   function armHover() {
     const h = cfg.hover || {}
@@ -436,7 +469,7 @@
     if (rule) {
       play(rand(rule.anims) || pickWeighted(), { onEnd: () => nextIdle() })
       squish()
-      showBubble(rand(rule.lines) || '', null, 2600)
+      showBubble(pickLine(rule.lines, `click:${rule.when}`) || '', null, 2600)
       return
     }
     play(rand(pool.clicks) || pickWeighted(), {
@@ -446,8 +479,11 @@
     // 混熟了就会说更亲昵的话（亲密度分级台词），没到级别就退回通用闲聊
     const lv = bondLevelNow()
     const lines = lv && lv.lines
-    if (lines && lines.length && Math.random() < 0.5) showBubble(rand(lines), null, 2600)
-    else showBubble(rand(cfg.idleTexts) || '', null, 2600)
+    if (lines && lines.length && Math.random() < 0.5) {
+      showBubble(pickLine(lines, `bond:${lv ? lv.key : ''}`), null, 2600)
+    } else {
+      showBubble(pickLine(cfg.idleTexts, 'idle-chat') || '', null, 2600)
+    }
   }
 
   function land() {
@@ -637,6 +673,9 @@
     // 真跑起来才发现报错就晚了。自检模式下把每条路径都走一遍，报错直接报出来。
     let probe = null
     let rotateArmed = null
+    let noRepeat = null
+    let bagSize = null
+    let lineCounts = null
     if (boot.selftest) {
       try {
         poke() // 普通戳一下（亲密度台词分支）
@@ -717,6 +756,30 @@
         onState({ phase: 'idle', force: true }) // 回 idle 要清掉
         const armedIdle = !!rotateTimer
         rotateArmed = armed1 === true && armed2 === true && armedIdle === false
+        // 文案：洗牌袋要保证「一轮之内不重复」。抽满一整轮的条数，
+        // 去重后应该正好等于总数——纯随机的话这里会明显少
+        const bag = []
+        for (let i = 0; i < cfg.idleTexts.length; i++) bag.push(pickLine(cfg.idleTexts, 'probe-bag'))
+        const bagUnique = new Set(bag).size
+        noRepeat = bagUnique === cfg.idleTexts.length
+        // 顺带统计各段文案条数，方便一眼看出哪一块还是太单薄
+        const countOf = (x) =>
+          Array.isArray(x)
+            ? x.reduce((s, v) => s + countOf(v), 0)
+            : x && typeof x === 'object'
+              ? Object.values(x).reduce((s, v) => s + countOf(v), 0)
+              : typeof x === 'string' && x.trim()
+                ? 1
+                : 0
+        lineCounts = {
+          idle: (cfg.idleTexts || []).length,
+          texts: countOf(cfg.texts),
+          bySource: countOf(cfg.textsBySource),
+          bond: countOf((cfg.bond || {}).levels || []),
+          hover: (cfg.hover || {}).lines ? (cfg.hover.lines || []).length : 0,
+          lonely: (cfg.lonely || {}).lines ? (cfg.lonely.lines || []).length : 0,
+        }
+        bagSize = bagUnique
         // 鼠标穿透：开了之后鱼要变淡，否则肉眼看不出开关有没有生效
         onClickThrough(true)
         const throughOn = document.body.classList.contains('through')
@@ -754,6 +817,9 @@
           phaseCounts,
           rotated,
           rotateArmed,
+          noRepeat,
+          bagSize,
+          lineCounts,
         }
       } catch (e) {
         probe = { error: String((e && e.message) || e) }

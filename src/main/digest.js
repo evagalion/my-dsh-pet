@@ -13,6 +13,8 @@ const path = require('node:path')
 const { app } = require('electron')
 
 const dayKey = (d) => `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`
+// 台词允许配成一句（字符串）或多句（数组），多句时随机挑一句
+const pick = (v) => (Array.isArray(v) ? v[Math.floor(Math.random() * v.length)] : v)
 
 function file() {
   return path.join(app.getPath('userData'), 'digest.json')
@@ -101,9 +103,13 @@ function line(cfg) {
       .replace('{top}', t.top || '没记住')
 
   // 一轮都没跑满 3 次就别念了，听着像在嘲讽
-  if (t.n < 3) return fill(lines.quiet || '今天一共 {n} 轮，还挺闲的~')
+  if (t.n < 3) return fill(pick(lines.quiet) || '今天一共 {n} 轮，还挺闲的~')
   const rate = t.ok / t.n
-  return fill(rate >= 0.7 ? lines.good || '今天跑了 {n} 轮，收工啦' : lines.bad || '今天 {n} 轮里挂了 {bad} 个')
+  return fill(
+    rate >= 0.7
+      ? pick(lines.good) || '今天跑了 {n} 轮，收工啦'
+      : pick(lines.bad) || '今天 {n} 轮里挂了 {bad} 个'
+  )
 }
 
 // 到了下班点、今天有数据、且还没播过 → 该播了
