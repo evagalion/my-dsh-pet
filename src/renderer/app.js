@@ -37,7 +37,7 @@
   // 抽袋能保证 48 句里至少轮过一遍才可能重复。
   // 每个 key 一个袋子，key 相同才共享（比如「戳它的闲聊」和「悬停台词」互不干扰）
   const bags = {}
-  function pickLine(arr, key) {
+  function pickNoRepeat(arr, key) {
     const list = (arr || []).filter((s) => s != null && s !== '')
     if (!list.length) return ''
     if (list.length === 1) return list[0]
@@ -97,24 +97,29 @@
     }
   }
 
+  // 待机动画链：先按权重选池，再在池内抽。
+  //
+  // 权重是按「池」给的，不是按段数——所以段少的池每段概率会暴涨。
+  // 修 fun 权重之前，「东张西望」一个人就占了 13%（turn 池只有它一段却给了 4 的权重），
+  // 而 74 段的趣味池每段只有 0.4%，观感就是来回来去那几段。
+  //
+  // 池内也走洗牌袋：49 段趣味素材会轮过一遍才可能重复。
+  const WEIGHT_POOLS = ['idle', 'turn', 'move', 'whisper', 'fun']
   function pickWeighted() {
     const w = cfg.weights || {}
-    const cand = [
-      [w.idle || 0, pool.idle],
-      [w.turn || 0, pool.turn],
-      [w.move || 0, pool.move],
-      [w.whisper || 0, pool.whisper],
-      [w.fun || 0, pool.fun],
-    ].filter((c) => c[0] > 0 && c[1] && c[1].length)
+    const cand = WEIGHT_POOLS.map((k) => [k, w[k] || 0, pool[k]]).filter(
+      (c) => c[1] > 0 && c[2] && c[2].length
+    )
 
-    if (!cand.length) return rand(pool.fun) || rand(pool.idle)
-    const total = cand.reduce((s, c) => s + c[0], 0)
+    if (!cand.length) return pickNoRepeat(pool.fun, 'anim:fun') || rand(pool.idle)
+    const total = cand.reduce((s, c) => s + c[1], 0)
     let r = Math.random() * total
     for (const c of cand) {
-      r -= c[0]
-      if (r <= 0) return rand(c[1])
+      r -= c[1]
+      if (r <= 0) return pickNoRepeat(c[2], 'anim:' + c[0])
     }
-    return rand(cand[cand.length - 1][1])
+    const last = cand[cand.length - 1]
+    return pickNoRepeat(last[2], 'anim:' + last[0])
   }
 
   // 命中区尺寸写在配置里：不同动画里鱼的姿态不一样，写死不通用。
@@ -145,7 +150,7 @@
       const ch = ((cfg.calendar || {}).chance || {})[occasion.kind]
       const p = ch == null ? (occasion.kind === 'festival' ? 0.35 : 0.12) : ch
       if (Math.random() < p) {
-        play(rand(occasion.anims), { onEnd: () => nextIdle() })
+        play(pickNoRepeat(occasion.anims, 'anim:occasion'), { onEnd: () => nextIdle() })
         return
       }
     }
@@ -154,10 +159,10 @@
     if (m.enabled !== false && Math.random() < (m.idleChance == null ? 0.3 : m.idleChance)) {
       const anims = ((m.anims || {})[moodSnap.mood]) || []
       if (anims.length) {
-        const a = rand(anims)
+        const a = pickNoRepeat(anims, 'anim:mood-' + moodSnap.mood)
         play(a, { onEnd: () => nextIdle() })
         if (moodSnap.mood === 'sad' && Math.random() < 0.5) {
-          showBubble(pickLine((m.lines || {}).sad, 'mood-sad') || '唉…', null, 2600)
+          showBubble(pickNoRepeat((m.lines || {}).sad, 'mood-sad') || '唉…', null, 2600)
         }
         return
       }
@@ -172,9 +177,9 @@
       pool.whisper.length &&
       Math.random() < 0.45
     ) {
-      play(rand(pool.whisper), {})
+      play(pickNoRepeat(pool.whisper, 'anim:whisper'), {})
       const lines = (f.lines || {}).hungry
-      showBubble(pickLine(lines, 'feed-hungry') || '肚子饿了…', null, 2600)
+      showBubble(pickNoRepeat(lines, 'feed-hungry') || '肚子饿了…', null, 2600)
       return
     }
     play(pickWeighted(), {})
@@ -244,7 +249,7 @@
   function playPhase(ph) {
     const anims = pool.phase[ph] || []
     if (!anims.length) return
-    play(rand(anims), { loop: true })
+    play(pickNoRepeat(anims, 'anim:phase-' + ph), { loop: true })
     clearRotate()
     const ms = ((cfg.phases || {})[ph] || {}).rotateMs || 0
     if (ms > 0 && anims.length > 1) {
@@ -277,7 +282,7 @@
         bubbleKey = key
         const texts = textsFor(s.source, phase)
         bubbleLine = texts.length
-          ? pickLine(texts, `phase:${s.source || ''}:${phase}`)
+          ? pickNoRepeat(texts, `phase:${s.source || ''}:${phase}`)
           : (cfg.phases[phase] || {}).label || ''
       }
       const transient = phase === 'success' || phase === 'error'
@@ -326,7 +331,7 @@
     if (Date.now() - hoverFiredAt < (h.cooldownMs || 30000)) return
     hoverFiredAt = Date.now()
     play(h.anim || '点击回应-害羞惊讶', { onEnd: () => nextIdle() })
-    showBubble(pickLine(h.lines, 'hover') || '盯着我干嘛呀…', null, 2600)
+    showBubble(pickNoRepeat(h.lines, 'hover') || '盯着我干嘛呀…', null, 2600)
   }
   function armHover() {
     const h = cfg.hover || {}
@@ -467,12 +472,14 @@
     api.bond('poke') // 戳一下涨一点亲密度
     const rule = clickRule()
     if (rule) {
-      play(rand(rule.anims) || pickWeighted(), { onEnd: () => nextIdle() })
+      play(pickNoRepeat(rule.anims, 'anim:click-' + rule.when) || pickWeighted(), {
+        onEnd: () => nextIdle(),
+      })
       squish()
-      showBubble(pickLine(rule.lines, `click:${rule.when}`) || '', null, 2600)
+      showBubble(pickNoRepeat(rule.lines, `click:${rule.when}`) || '', null, 2600)
       return
     }
-    play(rand(pool.clicks) || pickWeighted(), {
+    play(pickNoRepeat(pool.clicks, 'anim:clicks') || pickWeighted(), {
       onEnd: () => nextIdle(),
     })
     squish()
@@ -480,9 +487,9 @@
     const lv = bondLevelNow()
     const lines = lv && lv.lines
     if (lines && lines.length && Math.random() < 0.5) {
-      showBubble(pickLine(lines, `bond:${lv ? lv.key : ''}`), null, 2600)
+      showBubble(pickNoRepeat(lines, `bond:${lv ? lv.key : ''}`), null, 2600)
     } else {
-      showBubble(pickLine(cfg.idleTexts, 'idle-chat') || '', null, 2600)
+      showBubble(pickNoRepeat(cfg.idleTexts, 'idle-chat') || '', null, 2600)
     }
   }
 
@@ -645,6 +652,8 @@
             drag: pool.drag.length,
             move: pool.move.length,
             whisper: pool.whisper.length,
+            fun: pool.fun.length,
+            special: (pool.special || []).length,
           },
           anim: v ? v.src : '',
           currentTime: v ? Number(v.currentTime.toFixed(2)) : -1,
@@ -676,6 +685,8 @@
     let noRepeat = null
     let bagSize = null
     let lineCounts = null
+    let animNoRepeat = null
+    let animPools = null
     if (boot.selftest) {
       try {
         poke() // 普通戳一下（亲密度台词分支）
@@ -759,7 +770,7 @@
         // 文案：洗牌袋要保证「一轮之内不重复」。抽满一整轮的条数，
         // 去重后应该正好等于总数——纯随机的话这里会明显少
         const bag = []
-        for (let i = 0; i < cfg.idleTexts.length; i++) bag.push(pickLine(cfg.idleTexts, 'probe-bag'))
+        for (let i = 0; i < cfg.idleTexts.length; i++) bag.push(pickNoRepeat(cfg.idleTexts, 'probe-bag'))
         const bagUnique = new Set(bag).size
         noRepeat = bagUnique === cfg.idleTexts.length
         // 顺带统计各段文案条数，方便一眼看出哪一块还是太单薄
@@ -780,6 +791,18 @@
           lonely: (cfg.lonely || {}).lines ? (cfg.lonely.lines || []).length : 0,
         }
         bagSize = bagUnique
+        // 动画同理：连抽一整轮趣味素材，去重后应该正好等于总数
+        const abag = []
+        for (let i = 0; i < pool.fun.length; i++) abag.push(pickNoRepeat(pool.fun, 'probe-anim'))
+        animNoRepeat = new Set(abag).size === pool.fun.length
+        animPools = {
+          idle: pool.idle.length,
+          turn: pool.turn.length,
+          move: pool.move.length,
+          whisper: pool.whisper.length,
+          fun: pool.fun.length,
+          special: (pool.special || []).length,
+        }
         // 鼠标穿透：开了之后鱼要变淡，否则肉眼看不出开关有没有生效
         onClickThrough(true)
         const throughOn = document.body.classList.contains('through')
@@ -820,6 +843,8 @@
           noRepeat,
           bagSize,
           lineCounts,
+          animNoRepeat,
+          animPools,
         }
       } catch (e) {
         probe = { error: String((e && e.message) || e) }

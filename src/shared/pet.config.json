@@ -556,10 +556,10 @@
     ]
   },
   "weights": {
-    "idle": 10,
-    "turn": 4,
-    "move": 5,
-    "fun": 9,
+    "idle": 6,
+    "turn": 2,
+    "move": 4,
+    "fun": 16,
     "whisper": 2
   },
   "phases": {

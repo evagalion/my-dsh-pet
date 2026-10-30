@@ -5,6 +5,33 @@
 
 const MOVE_SET = new Set(['螃蟹走路', '原地漂浮踏步', '原地左转奔跑'])
 
+// 「专属时刻」的素材：成就大招、节日动作、作息动画、拆礼物……
+// 这些平时混在趣味池里随机播得到，后果有两个：
+//   1. 待机时撞出「蓝鲸现世」，等真达成成就时已经不稀奇了
+//   2. 它们挤占了真正日常素材的曝光
+// 所以单独收进 special 池：菜单里照样能点播，但不参与待机随机。
+function reservedOf(cfg) {
+  const s = new Set()
+  const add = (v) => {
+    if (!v) return
+    if (typeof v === 'string') s.add(v)
+    else if (Array.isArray(v)) v.forEach(add)
+    else if (typeof v === 'object') Object.values(v).forEach(add)
+  }
+  const ach = cfg.achievements || {}
+  for (const it of ach.items || []) add(it.anim)
+  const cal = cfg.calendar || {}
+  add(cal.festivalAnims)
+  add(cal.solarAnims)
+  add(cal.seasonAnims)
+  const r = cfg.routine || {}
+  add((r.morning || {}).anim)
+  add((r.lateNight || {}).anim)
+  add((r.longSit || {}).anim)
+  add((cfg.coins || {}).giftAnims)
+  return s
+}
+
 function classify(assets, cfg) {
   const p = {
     idle: [],
@@ -15,6 +42,7 @@ function classify(assets, cfg) {
     clicks: [],
     drag: [],
     balance: [],
+    special: [],
     phase: {},
   }
 
@@ -36,6 +64,7 @@ function classify(assets, cfg) {
   for (const k of Object.keys(p.phase)) for (const n of p.phase[k]) phaseAnims.add(n)
 
   const idleSet = new Set(cfg.idleAnims || [])
+  const reserved = reservedOf(cfg)
 
   for (const a of assets) {
     if (phaseAnims.has(a)) {
@@ -54,6 +83,8 @@ function classify(assets, cfg) {
       p.turn.push(a)
     } else if (MOVE_SET.has(a)) {
       p.move.push(a)
+    } else if (reserved.has(a)) {
+      p.special.push(a) // 只在特定时刻自动播，菜单里仍能手动点
     } else {
       p.fun.push(a)
     }
@@ -75,6 +106,7 @@ const GROUP_LABELS = {
   whisper: '碎碎念',
   balance: '余额',
   turn: '转身',
+  special: '特殊时刻',
 }
 
 function menuGroups(pools, cfg) {
@@ -102,11 +134,21 @@ function menuGroups(pools, cfg) {
   }
 
   const fun = pools.fun || []
+
   const CHUNK = 24
   for (let i = 0; i < fun.length; i += CHUNK) {
     groups.push({
       label: fun.length > CHUNK ? `趣味 ${Math.floor(i / CHUNK) + 1}` : '趣味',
       items: fun.slice(i, i + CHUNK).map((n) => ({ name: n, label: n })),
+    })
+  }
+
+  // 特殊时刻的放最后，并注明它们平时不会自动播——不然用户点了没反应会以为坏了
+  const sp = pools.special || []
+  if (sp.length) {
+    groups.push({
+      label: `特殊时刻（平时不自动播）`,
+      items: sp.map((n) => ({ name: n, label: n })),
     })
   }
 
