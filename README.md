@@ -546,6 +546,26 @@ npm run dist:dmg   # 顺带打一个 dmg 安装包
 
 打包后首次启动注意两点：**先退出 `npm start` 那个实例**（否则桌面上会有两条鱼）；**窗口位置会回到默认右下角**，因为 bundle id 变了，配置存在新的 userData 目录里。
 
+### 发给别人：第一次打开被拦怎么办
+
+用 ad-hoc 自签名（`codesign --sign -`），没买 Apple 开发者证书，所以**别人下载过去一定会被 Gatekeeper 拦**：
+
+> 无法打开"大肥鱼"，因为 Apple 无法检查其是否包含恶意软件。
+
+这不是文件坏了。解决办法写在 **[首次打开说明.md](./首次打开说明.md)** 里，分发时把这个文件和 `.app` 一起打包：
+
+```bash
+# 产出 dist/大肥鱼.zip：里面是一个「大肥鱼」文件夹，含 大肥鱼.app + 首次打开说明.md
+mkdir -p /tmp/大肥鱼分发/大肥鱼
+ditto dist/大肥鱼.app /tmp/大肥鱼分发/大肥鱼/大肥鱼.app
+cp 首次打开说明.md /tmp/大肥鱼分发/大肥鱼/
+ditto -c -k --sequesterRsrc --keepParent /tmp/大肥鱼分发/大肥鱼 dist/大肥鱼.zip
+```
+
+对方最快的解法是：**把 app 拖进「应用程序」→ 右键 → 打开 → 点「打开」**。
+
+想彻底根治只能上 Apple 开发者证书（¥688/年）：拿到 `Developer ID Application` 证书后，签名改成 `codesign --sign "Developer ID Application: ..." --options runtime --timestamp` 并走 `xcrun notarytool submit` 公证。这台机器上 `security find-identity -p codesigning` 目前是 0 个身份，所以暂时做不到。
+
 ---
 
 ## 已知限制 & 后续可做
