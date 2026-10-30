@@ -160,6 +160,13 @@ function bondLevel(cfg, value) {
   return hit
 }
 
+// 上次戳它/喂它的时刻。亲密度衰减本来就从这个时刻起算，
+// 顺手拿来判断「多久没理它了」，不用再单独记一个时间戳
+function lastBondAt() {
+  const cur = load().bond
+  return cur ? cur.at || 0 : 0
+}
+
 // ---- 两个主动开口的时机 ----
 // 都由 index.js 每次轮询喂进三家各自的状态来驱动
 
@@ -237,6 +244,8 @@ function snapshot(cfg) {
     sulking: isSulking(cfg, now),
     bond: bond == null ? null : Math.round(bond),
     level: lv ? { key: lv.key, label: lv.label } : null,
+    // 上次戳它/喂它的时间。亲密度衰减本来就从这一刻起算，顺手拿来判断「多久没理它了」
+    lastAt: (load().bond && load().bond.at) || null,
   }
 }
 
@@ -247,6 +256,7 @@ module.exports = {
   bumpBond,
   bondValue,
   bondLevel,
+  lastBondAt,
   isSulking,
   trailingErrors,
   trailingSuccesses,

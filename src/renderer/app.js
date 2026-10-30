@@ -18,6 +18,7 @@
   let token = 0
   let phase = 'idle'
   let phaseTimer = null
+  let rotateTimer = null // 同一档位内部轮换动画的定时器，切档或回 idle 时要清掉
   let bubbleTimer = null
   let bubbleKey = '' // 当前气泡台词对应的「agent|档位」，用来防止步骤刷新时台词乱跳
   let bubbleLine = ''
@@ -207,15 +208,37 @@
     v.classList.add('squish')
   }
 
+  // 同一档位持续太久只播一段会腻（working 一播就是几分钟），
+  // 配了 rotateMs 就在档位内部换一段接着 loop
+  function playPhase(ph) {
+    const anims = pool.phase[ph] || []
+    if (!anims.length) return
+    play(rand(anims), { loop: true })
+    clearRotate()
+    const ms = ((cfg.phases || {})[ph] || {}).rotateMs || 0
+    if (ms > 0 && anims.length > 1) {
+      rotateTimer = setTimeout(() => {
+        if (phase === ph && Date.now() >= manualUntil) playPhase(ph)
+      }, ms)
+    }
+  }
+
+  function clearRotate() {
+    clearTimeout(rotateTimer)
+    rotateTimer = null // 置空才能区分「有定时器」和「清过了」，自检靠这个判断
+  }
+
   function onState(s) {
     if (Date.now() < manualUntil && !(s && s.force)) return
     const prev = phase
     phase = s.phase || 'idle'
     clearTimeout(phaseTimer)
+    // 关键：状态每秒推一次，同档位续播时**不能**清轮换定时器，
+    // 否则刚进档位挂上的定时器下一秒就被冲掉，轮换永远触发不了
+    if (phase === 'idle' || prev !== phase || s.force) clearRotate()
 
     if (phase !== 'idle') {
-      const anim = pool.phase[phase]
-      if (anim && (prev !== phase || s.force)) play(anim, { loop: true })
+      if (prev !== phase || s.force) playPhase(phase)
       // 步骤每变一次都会推一次状态，但台词不能跟着乱跳：
       // 同一个 agent 的同一个档位一直用同一句，只有切档/换人才重抽。
       const key = (s.source || '') + '|' + phase
@@ -384,20 +407,39 @@
     api.openMenu()
   })
 
+  // 戳它一下播哪段：以前 5 段「点击回应」纯随机，跟心情、跟你俩熟不熟完全无关。
+  // 现在按顺序匹配 cfg.click.rules，命中第一条就用它的动画和台词，都没命中才随机。
+  // when 支持：sulk（赌气）/ greet（久别重逢）/ bond:<档位key> / mood:<心情key>
+  function clickRule() {
+    const c = cfg.click || {}
+    if (c.enabled === false) return null
+    const lv = bondLevelNow()
+    for (const r of c.rules || []) {
+      if (!r || !r.anims || !r.anims.length) continue
+      const w = String(r.when || '')
+      let hit = false
+      if (w === 'sulk') hit = !!moodSnap.sulking
+      // 久别重逢：用亲密度存档里那个「上次理我」的时间戳，跨重启也记得住
+      else if (w === 'greet')
+        hit = !!moodSnap.lastAt && Date.now() - moodSnap.lastAt > (c.greetAfterMs || 7200000)
+      else if (w.indexOf('bond:') === 0) hit = !!lv && lv.key === w.slice(5)
+      else if (w.indexOf('mood:') === 0) hit = moodSnap.mood === w.slice(5)
+      if (hit) return r
+    }
+    return null
+  }
+
   function poke() {
     api.click() // 点一下出声。音效在主进程播，不经过渲染层
     api.bond('poke') // 戳一下涨一点亲密度
-    const m = cfg.mood || {}
-    // 连续失败之后它会赌气：戳它也不给好脸色，扭头播个傲娇生气
-    if (m.enabled !== false && moodSnap.sulking) {
-      const a = rand(((m.anims || {}).sulk) || []) || rand(pool.clicks)
-      play(a || pickWeighted(), { onEnd: () => nextIdle() })
+    const rule = clickRule()
+    if (rule) {
+      play(rand(rule.anims) || pickWeighted(), { onEnd: () => nextIdle() })
       squish()
-      showBubble(rand((m.lines || {}).sulk) || '哼，不理你！', null, 2600)
+      showBubble(rand(rule.lines) || '', null, 2600)
       return
     }
-    const a = rand(pool.clicks)
-    play(a || pickWeighted(), {
+    play(rand(pool.clicks) || pickWeighted(), {
       onEnd: () => nextIdle(),
     })
     squish()
@@ -500,11 +542,24 @@
     if (d.line) showBubble(d.line, null, 5000)
   }
 
+  // 冷落太久它主动来找你。跟作息/成就一样是「播一段 + 冒一句」，
+  // 但气泡留久一点——它就是想让你看见
+  function onLonely(d) {
+    if (!d || !d.anim) return
+    manualUntil = Date.now() + 9000
+    clearTimeout(phaseTimer)
+    hideBubble()
+    phase = 'idle'
+    play(d.anim, { onEnd: () => nextIdle() })
+    if (d.line) showBubble(d.line, null, 6000)
+  }
+
   // 穿透开启时鱼淡一点。不然整窗透明、鼠标也不响应，开了跟没开看不出区别
   function onClickThrough(on) {
     document.body.classList.toggle('through', !!on)
   }
   api.on('pet:clickthrough', onClickThrough)
+  api.on('pet:lonely', onLonely)
   api.on('pet:liedown', onLieDown)
   api.on('pet:stuck', onStuck)
   api.on('pet:routine', playOnce)
@@ -581,6 +636,7 @@
     // 心情相关的分支平时要等触发条件（连续失败 / 摸鱼 8 分钟 / 卡 5 分钟）才跑得到，
     // 真跑起来才发现报错就晚了。自检模式下把每条路径都走一遍，报错直接报出来。
     let probe = null
+    let rotateArmed = null
     if (boot.selftest) {
       try {
         poke() // 普通戳一下（亲密度台词分支）
@@ -621,6 +677,46 @@
         fireHover()
         const hoverAnim = nameOf(vids[active].src)
         const hoverLine = bubbleText.textContent
+        // 冷落了来找你：敲桌子 / 吐泡泡。跟作息共用 playOnce 的形状，这里直接调 onLonely
+        manualUntil = 0
+        phase = 'idle'
+        onLonely({ anim: '原地敲击桌面互动', line: '喂，理理我嘛…', bond: 40, level: '面熟' })
+        const lonelyAnim = nameOf(vids[active].src)
+        const lonelyLine = bubbleText.textContent
+        // 戳它的反应现在按心情/亲密度走 cfg.click.rules（按顺序命中第一条）。
+        // 注意 bond 档位规则排在 mood 规则前面，所以验 mood:happy 时亲密度要压低，
+        // 否则会先被 bond:best 截胡
+        moodSnap = Object.assign({}, moodSnap, { sulking: false, mood: 'happy', bond: 30 })
+        poke()
+        const happyPokeAnim = nameOf(vids[active].src) // mood:happy → 开心跃动
+        moodSnap = Object.assign({}, moodSnap, { mood: 'calm', bond: 95 })
+        poke()
+        const bestPokeAnim = nameOf(vids[active].src) // bond:best → 挠痒咯咯笑
+        moodSnap = Object.assign({}, moodSnap, { bond: 95, lastAt: Date.now() - 3 * 3600000 })
+        poke()
+        const greetPokeAnim = nameOf(vids[active].src) // greet → 元气挥手
+        // 工作档位现在每档可以多段轮换，验证 working 真的配了不止一段
+        const phaseCounts = {}
+        for (const k of Object.keys(pool.phase)) phaseCounts[k] = pool.phase[k].length
+        // 档位内轮换：连播几次要能看到不只一种（否则等于没配）
+        manualUntil = 0
+        phase = 'working'
+        const rotSeen = new Set()
+        for (let i = 0; i < 40; i++) {
+          playPhase('working')
+          rotSeen.add(nameOf(vids[active].src))
+        }
+        const rotated = rotSeen.size
+        // 轮换定时器必须活得过同档位的后续推送——状态每秒推一次，
+        // 之前 onState 开头无条件 clearTimeout，把它冲掉了
+        manualUntil = 0
+        onState({ phase: 'working', force: true })
+        const armed1 = !!rotateTimer
+        onState({ phase: 'working' }) // 第二次同档位推送
+        const armed2 = !!rotateTimer
+        onState({ phase: 'idle', force: true }) // 回 idle 要清掉
+        const armedIdle = !!rotateTimer
+        rotateArmed = armed1 === true && armed2 === true && armedIdle === false
         // 鼠标穿透：开了之后鱼要变淡，否则肉眼看不出开关有没有生效
         onClickThrough(true)
         const throughOn = document.body.classList.contains('through')
@@ -650,6 +746,14 @@
           achieveAnim,
           hoverAnim,
           hoverLine,
+          lonelyAnim,
+          lonelyLine,
+          happyPokeAnim,
+          bestPokeAnim,
+          greetPokeAnim,
+          phaseCounts,
+          rotated,
+          rotateArmed,
         }
       } catch (e) {
         probe = { error: String((e && e.message) || e) }

@@ -27,6 +27,7 @@ contextBridge.exposeInMainWorld('petAPI', {
       'pet:gift',
       'pet:digest',
       'pet:occasion',
+      'pet:lonely',
       'pet:landed',
       'pet:speak',
       'pet:play',

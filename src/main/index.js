@@ -19,6 +19,7 @@ const routine = require('./routine')
 const coins = require('./coins')
 const digest = require('./digest')
 const achieve = require('./achieve')
+const lonely = require('./lonely')
 
 const pick = (arr) => (arr && arr.length ? arr[Math.floor(Math.random() * arr.length)] : null)
 
@@ -609,11 +610,21 @@ function applyMood(all) {
   }
 }
 
-// 作息动画：早上刷牙 / 深夜打瞌睡 / 久坐伸懒腰
+// 作息动画：早上刷牙 / 深夜打瞌睡 / 久坐伸懒腰 / 摸鱼时自己玩
 function applyRoutine(all, now) {
   if (!win || win.isDestroyed()) return
   const r = routine.watch(cfg, all, now)
   if (r) win.webContents.send('pet:routine', r)
+}
+
+// 冷落太久，它主动来引起你注意（敲桌子 / 吐泡泡）
+function applyLonely(all, now) {
+  if (!win || win.isDestroyed()) return
+  const l = lonely.watch(cfg, all, now)
+  if (l) {
+    win.webContents.send('pet:lonely', l)
+    if (l.line) sfx.speakText(cfg, l.line)
+  }
 }
 
 // 今天过不过节。一天只会变一次，所以按日期缓存，变了才推给渲染层
@@ -802,6 +813,7 @@ app.whenReady().then(() => {
           applyMood(all)
           applyRoutine(all, now)
           applyOccasion(now)
+          applyLonely(all, now)
         })
         .catch(() => {})
     }

@@ -18,13 +18,28 @@ function classify(assets, cfg) {
     phase: {},
   }
 
-  const byAnim = {}
-  for (const k of Object.keys(cfg.phases || {})) byAnim[cfg.phases[k].anim] = k
+  // 每档可以配多段轮换（phases.x.anims 数组），只配一段就退化成原来的单段行为。
+  // 素材不存在的话直接丢掉——配置里写错名字不会让菜单出现点不动的项
+  const phases = cfg.phases || {}
+  const assetSet = new Set(assets)
+  for (const k of Object.keys(phases)) {
+    const one = Array.isArray(phases[k].anims) && phases[k].anims.length
+      ? phases[k].anims.slice()
+      : phases[k].anim
+        ? [phases[k].anim]
+        : []
+    const ok = one.filter((n) => assetSet.has(n))
+    if (ok.length) p.phase[k] = ok
+  }
+  // 工作状态素材不参与待机/趣味的随机池，不然待机时会撞出「工作中」的动作
+  const phaseAnims = new Set()
+  for (const k of Object.keys(p.phase)) for (const n of p.phase[k]) phaseAnims.add(n)
+
   const idleSet = new Set(cfg.idleAnims || [])
 
   for (const a of assets) {
-    if (byAnim[a]) {
-      p.phase[byAnim[a]] = a
+    if (phaseAnims.has(a)) {
+      /* 已在 p.phase 里按配置归好类了 */
     } else if (a.startsWith('余额-')) {
       p.balance.push(a)
     } else if (a.startsWith('碎碎念-')) {
@@ -68,10 +83,17 @@ function menuGroups(pools, cfg) {
 
   const groups = []
 
-  const phaseItems = Object.keys(pools.phase).map((k) => ({
-    name: pools.phase[k],
-    label: phaseLabels[pools.phase[k]] || k,
-  }))
+  const phaseItems = []
+  for (const k of Object.keys(pools.phase)) {
+    for (const n of pools.phase[k]) {
+      // 同一档有多段时把档位名带上，菜单里才分得清「工作中：忙碌点按」和「工作中：写代码」
+      const label =
+        pools.phase[k].length > 1
+          ? `${phaseLabels[n] || cfg.phases[k].label || k}：${n}`
+          : phaseLabels[n] || k
+      phaseItems.push({ name: n, label })
+    }
+  }
   if (phaseItems.length) groups.push({ label: '工作状态', items: phaseItems })
 
   for (const key of ['idle', 'move', 'clicks', 'whisper', 'balance', 'turn']) {
