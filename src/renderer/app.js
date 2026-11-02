@@ -131,7 +131,32 @@
     hit.style.bottom = (a.bottom == null ? 3 : a.bottom) + '%'
     hit.style.height = (a.height == null ? 52 : a.height) + '%'
     hit.style.borderRadius = a.radius || '48% 48% 30% 30% / 38% 38% 22% 22%'
+    layoutBubble()
   }
+
+  // 气泡要贴着头顶，不能钉在窗口顶部。
+  //
+  // 素材是 640x360，按 object-fit:contain + bottom 贴底显示的：320x280 的窗口里
+  // 实际只画了下面 180px，上面 100px 全是透明像素。所以写 top:2px 的话气泡会飘在
+  // 离头顶七十多像素的半空中。这里按窗口尺寸现算头顶在窗口里的 y，再定气泡底边。
+  const FRAME = { w: 640, h: 360 }
+  function headTopPx() {
+    const b = (cfg && cfg.pet && cfg.pet.bubble) || {}
+    const ratio = b.headTop == null ? 0.175 : b.headTop // 头顶在素材里的高度比例（量出来 y≈63/360）
+    const W = window.innerWidth || FRAME.w
+    const H = window.innerHeight || FRAME.h
+    const s = Math.min(W / FRAME.w, H / FRAME.h) // contain 的缩放比
+    return H - FRAME.h * s + ratio * FRAME.h * s
+  }
+  function layoutBubble() {
+    const b = (cfg && cfg.pet && cfg.pet.bubble) || {}
+    const gap = b.gap == null ? 6 : b.gap // 气泡底边离头顶留多少 px
+    const H = window.innerHeight || FRAME.h
+    const bottom = Math.max(0, Math.round(H - headTopPx() + gap))
+    document.documentElement.style.setProperty('--bubble-bottom', bottom + 'px')
+  }
+  // 窗口尺寸改了（配置里改了 pet.width/height）要重算，不然气泡又飘回半空
+  window.addEventListener('resize', layoutBubble)
 
   // 亲密度够到哪一档，就能解锁那一档的台词
   function bondLevelNow() {
@@ -810,6 +835,16 @@
         const throughOff = document.body.classList.contains('through')
         // 命中区：stage 不收鼠标，只有 hit 收，且 hit 必须明显小于整个窗口
         applyHitArea()
+        // 气泡位置：底边要压在头顶上方一点点（gap 配的是 6px，量出来应该在 0~16px 内）。
+        // 写死 top 的话这里会变成 70+，一眼就能看出气泡飘走了
+        // 先关掉入场动画，不然量到的是 translateY(6px) 那个还没落位的中间态
+        const savedTransition = bubble.style.transition
+        bubble.style.transition = 'none'
+        showBubble('自检：气泡贴头顶', {}, 0)
+        const br = bubble.getBoundingClientRect()
+        const bubbleGap = Math.round(headTopPx() - br.bottom)
+        hideBubble()
+        bubble.style.transition = savedTransition
         const hr = hit.getBoundingClientRect()
         const hitInfo = {
           stage: getComputedStyle(stage).pointerEvents,
@@ -829,6 +864,7 @@
           occasionAnim,
           through: throughOn === true && throughOff === false,
           hit: hitInfo,
+          bubble: { gap: bubbleGap, bottom: Math.round(br.bottom), headTop: Math.round(headTopPx()) },
           achieveAnim,
           hoverAnim,
           hoverLine,

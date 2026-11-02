@@ -85,7 +85,9 @@ body.through #stage {
 .bubble {
   position: absolute;
   left: 50%;
-  top: 2px;
+  /* 底边贴着头顶：--bubble-bottom 由 app.js 按窗口尺寸现算（素材 contain 贴底，
+     窗口上半部分是空的，写死 top 会让气泡飘在半空）。行高变化时气泡往上长。 */
+  bottom: var(--bubble-bottom, 155px);
   transform: translateX(-50%) translateY(6px);
   width: max-content;
   max-width: 96%;
