@@ -355,7 +355,9 @@
     if (phase !== 'idle' || Date.now() < manualUntil) return
     if (Date.now() - hoverFiredAt < (h.cooldownMs || 30000)) return
     hoverFiredAt = Date.now()
-    play(h.anim || '点击回应-害羞惊讶', { onEnd: () => nextIdle() })
+    // anims 配数组就洗牌袋轮着来；老配置只写单个 anim 也兼容
+    const anims = h.anims && h.anims.length ? h.anims : h.anim ? [h.anim] : ['点击回应-害羞惊讶']
+    play(pickNoRepeat(anims, 'anim:hover') || anims[0], { onEnd: () => nextIdle() })
     showBubble(pickNoRepeat(h.lines, 'hover') || '盯着我干嘛呀…', null, 2600)
   }
   function armHover() {
@@ -504,7 +506,10 @@
       showBubble(pickNoRepeat(rule.lines, `click:${rule.when}`) || '', null, 2600)
       return
     }
-    play(pickNoRepeat(pool.clicks, 'anim:clicks') || pickWeighted(), {
+    // 兜底池写在配置里：以前只有 5 段「点击回应-*」，来回来去就那几个动作。
+    // 现在混进「被吓一跳 / 偷吃被抓 / 转个圈 / 吐泡泡」这类即时反应，一样走洗牌袋
+    const fallback = (cfg.click || {}).fallbackAnims || pool.clicks
+    play(pickNoRepeat(fallback, 'anim:click-fallback') || pickWeighted(), {
       onEnd: () => nextIdle(),
     })
     squish()
@@ -712,6 +717,8 @@
     let lineCounts = null
     let animNoRepeat = null
     let animPools = null
+    let clickVariety = null
+    let hoverVariety = null
     if (boot.selftest) {
       try {
         poke() // 普通戳一下（亲密度台词分支）
@@ -763,13 +770,40 @@
         // 否则会先被 bond:best 截胡
         moodSnap = Object.assign({}, moodSnap, { sulking: false, mood: 'happy', bond: 30 })
         poke()
-        const happyPokeAnim = nameOf(vids[active].src) // mood:happy → 开心跃动
+        const happyPokeAnim = nameOf(vids[active].src) // mood:happy → 从 happy 池里抽一段
         moodSnap = Object.assign({}, moodSnap, { mood: 'calm', bond: 95 })
         poke()
-        const bestPokeAnim = nameOf(vids[active].src) // bond:best → 挠痒咯咯笑
+        const bestPokeAnim = nameOf(vids[active].src) // bond:best → 从最亲那池里抽
         moodSnap = Object.assign({}, moodSnap, { bond: 95, lastAt: Date.now() - 3 * 3600000 })
         poke()
-        const greetPokeAnim = nameOf(vids[active].src) // greet → 元气挥手
+        const greetPokeAnim = nameOf(vids[active].src) // greet → 从久别那池里抽
+        // 点击动画不再千篇一律：把 mood 压回平静、亲密度压低、刚理过它（不命中任何规则），
+        // 连点一整轮，去重数应该正好等于兜底池大小——洗牌袋生效才做得到
+        const fb = (cfg.click || {}).fallbackAnims || []
+        moodSnap = Object.assign({}, moodSnap, {
+          sulking: false,
+          mood: 'calm',
+          bond: 30,
+          lastAt: Date.now(),
+        })
+        const clickSeen = new Set()
+        for (let i = 0; i < fb.length; i++) {
+          poke()
+          clickSeen.add(nameOf(vids[active].src))
+        }
+        clickVariety = { pool: fb.length, unique: clickSeen.size, allUsed: clickSeen.size === fb.length }
+        // 悬停反应同理：配了 anims 数组就该轮着来
+        const hv = (cfg.hover || {}).anims || []
+        // 抽两轮：袋子可能已被前面的 probe 消耗过，只抽一轮会跨轮次边界撞上重复
+        const hoverSeen = new Set()
+        for (let i = 0; i < hv.length * 2; i++) {
+          hoverFiredAt = 0
+          phase = 'idle'
+          manualUntil = 0
+          fireHover()
+          hoverSeen.add(nameOf(vids[active].src))
+        }
+        hoverVariety = { pool: hv.length, unique: hoverSeen.size, allUsed: hoverSeen.size === hv.length }
         // 工作档位现在每档可以多段轮换，验证 working 真的配了不止一段
         const phaseCounts = {}
         for (const k of Object.keys(pool.phase)) phaseCounts[k] = pool.phase[k].length
@@ -881,6 +915,8 @@
           lineCounts,
           animNoRepeat,
           animPools,
+          clickVariety,
+          hoverVariety,
         }
       } catch (e) {
         probe = { error: String((e && e.message) || e) }
