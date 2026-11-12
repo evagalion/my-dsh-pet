@@ -14,7 +14,9 @@
     "bubble": {
       "headTop": 0.175,
       "gap": 6
-    }
+    },
+    "playGuardMs": 1500,
+    "playStallMs": 12000
   },
   "idleAnims": ["待机呼吸休闲", "原地小憩沉眠", "哈欠连天", "悠闲哼歌"],
   "pollIntervalMs": 1000,

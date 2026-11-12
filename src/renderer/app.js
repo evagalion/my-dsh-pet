@@ -66,15 +66,50 @@
   const nameOf = (src) =>
     decodeURIComponent(String(src || '').replace(/^pet:\/*/i, '')).replace(/\.webm$/, '')
 
+  // 素材走 pet:// 协议，换 src 之后要异步解码。早先是「立刻隐藏旧 video、显示新 video」，
+  // 解码空窗里两个都不出画面，整窗透明，用户看到的就是「只剩文字、鱼不见了」；
+  // 更要命的是 play() 失败被吞掉、onended 又没来时，播放链会停死在空白帧再也回不来。
+  // 现在等新视频首帧就绪才切，旧画面一直留着；超时/报错/play 被拒都有兜底把链往下推。
   function play(name, opts) {
     if (!name) return
     opts = opts || {}
     const next = vids[1 - active]
-    const cur = vids[active]
     const my = ++token
+    let shown = false
+    let advanced = false
+    let guard = null
+
+    const reveal = () => {
+      if (my !== token || shown) return
+      shown = true
+      if (guard) clearTimeout(guard)
+      // 按当前 active 统一收口：快速连点时被打断的那次不会把 show 留在错的元素上
+      vids.forEach((v, i) => v.classList.toggle('show', i === active))
+      // 画面已经出来了，但 onended 万一不来（解码卡住 / 媒体僵住）也别让状态机停死：
+      // 把短超时换成长看门狗，素材普遍 10 秒，给 12 秒余量
+      if (!opts.loop) {
+        guard = setTimeout(() => {
+          if (my !== token) return
+          advance()
+        }, (cfg.pet && cfg.pet.playStallMs) || 12000)
+      }
+    }
+    const advance = () => {
+      if (my !== token || advanced) return
+      advanced = true
+      if (guard) clearTimeout(guard)
+      if (opts.onEnd) opts.onEnd()
+      else nextIdle()
+    }
 
     next.loop = !!opts.loop
     next.onended = null
+    next.onloadeddata = reveal
+    next.oncanplay = reveal // 双保险：个别情况下只来 canplay 不来 loadeddata
+    next.onerror = () => {
+      // 加载失败时绝不能把 show 挪到这个空元素上：旧画面继续留着，只把播放链往下推
+      if (my === token) advance()
+    }
     next.src = 'pet://' + encodeURIComponent(name) + '.webm'
     try {
       next.currentTime = 0
@@ -82,17 +117,29 @@
       /* noop */
     }
     const pr = next.play()
-    if (pr && pr.catch) pr.catch(() => {})
+    if (pr && pr.catch)
+      pr.catch(() => {
+        // 被下一次 play 打断是正常现象（my !== token），只有真失败才需要兜底推进
+        if (my === token) advance()
+      })
 
-    next.classList.add('show')
-    cur.classList.remove('show')
+    // 逻辑上的 current 立刻切换：自检靠它同步读到本次播的到底是哪段素材
     active = 1 - active
+
+    guard = setTimeout(() => {
+      if (my !== token || advanced) return
+      // 解码迟迟不来 / 事件没触发，也要让播放链继续，别停死。
+      // 只要屏幕上还有一帧看得见的旧画面就别抢着换，开机第一帧没画面时才强制切
+      const visibleFrame = vids.some((v) => v.classList.contains('show') && v.readyState >= 2)
+      if (next.readyState >= 2 || !visibleFrame) reveal()
+      if (!opts.loop) advance()
+    }, (cfg.pet && cfg.pet.playGuardMs) || 1500)
 
     if (!opts.loop) {
       next.onended = () => {
         if (my !== token) return
-        if (opts.onEnd) opts.onEnd()
-        else nextIdle()
+        reveal()
+        advance()
       }
     }
   }
@@ -719,6 +766,8 @@
     let animPools = null
     let clickVariety = null
     let hoverVariety = null
+    let revealOk = null
+    let anyVisible = null
     if (boot.selftest) {
       try {
         poke() // 普通戳一下（亲密度台词分支）
@@ -879,6 +928,17 @@
         const bubbleGap = Math.round(headTopPx() - br.bottom)
         hideBubble()
         bubble.style.transition = savedTransition
+        // 播放切换：新逻辑要等 loadeddata 才把 show 挪到新视频，旧画面在此之前一直留着。
+        // 自检是同步的，事件不会自己来，这里手动派发一次验证 show 收口在 active 上
+        manualUntil = 0
+        phase = 'idle'
+        play('待机呼吸休闲', { onEnd: () => {} })
+        const targetVid = vids[active]
+        const otherVid = vids[1 - active]
+        targetVid.dispatchEvent(new Event('loadeddata'))
+        revealOk =
+          targetVid.classList.contains('show') && !otherVid.classList.contains('show')
+        anyVisible = vids.some((v) => v.classList.contains('show'))
         const hr = hit.getBoundingClientRect()
         const hitInfo = {
           stage: getComputedStyle(stage).pointerEvents,
@@ -917,6 +977,7 @@
           animPools,
           clickVariety,
           hoverVariety,
+          reveal: { revealOk, anyVisible },
         }
       } catch (e) {
         probe = { error: String((e && e.message) || e) }
