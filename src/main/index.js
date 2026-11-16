@@ -12,7 +12,6 @@ const { createTray } = require('./tray')
 const { createFlight, step } = require('../shared/physics')
 const { classify, menuGroups } = require('../shared/animations')
 const sfx = require('./sfx')
-const sticker = require('./sticker')
 const feed = require('./feed')
 const mood = require('./mood')
 const calendar = require('./calendar')
@@ -288,12 +287,6 @@ function coinsMenuItems() {
   ]
 }
 
-// 表情包：先问渲染层当前在播哪段、说了啥，拿到后由 sticker 模块抽帧叠字导出
-function stickerMenuItems() {
-  if ((cfg.sticker || {}).enabled === false) return []
-  return [{ label: '做张表情包', click: () => win && win.webContents.send('pet:sticker-request') }]
-}
-
 // 递小纸条：手动点一张关怀便签（自动的那张由 tick 里的 applyNote 负责）
 function noteMenuItems() {
   if ((cfg.note || {}).enabled === false) return []
@@ -493,7 +486,6 @@ async function buildMenuTemplate() {
     { type: 'separator' },
     { label: '摸一下', click: () => win.webContents.send('pet:poke') },
     ...rpsMenuItems(),
-    ...stickerMenuItems(),
     ...noteMenuItems(),
     ...feedMenuItems(),
     ...coinsMenuItems(),
@@ -901,7 +893,6 @@ app.whenReady().then(() => {
           speakCheck,
           rps: rpsCheck,
           rpsAllOk: Object.values(rpsCheck).every(Boolean),
-          stickerMenuOk: labels.includes('做张表情包'),
           noteMenuOk: labels.includes('递张小纸条'),
           note: noteCheck,
           noteAllOk: Object.values(noteCheck).every(Boolean),
@@ -918,11 +909,6 @@ app.whenReady().then(() => {
   ipcMain.on('pet:drag-end', () => persistPosition())
   // 点一下鱼身：播随机点击音效。渲染层已经判过「没拖动」了，这里只管出声
   ipcMain.on('pet:click', () => sfx.click(cfg))
-  // 表情包：渲染层回传当前动画+台词，生成后把结果/错误报回给它弹气泡
-  ipcMain.on('pet:sticker-make', async (_e, d) => {
-    const r = await sticker.make(d && d.anim, d && d.line)
-    if (win && !win.isDestroyed()) win.webContents.send('pet:sticker-result', r)
-  })
   // 戳它 / 喂它都涨亲密度。渲染层戳的时候顺手报一下
   ipcMain.on('pet:bond', (_e, kind) => bumpBond(kind === 'feed' ? 'feed' : 'poke'))
   ipcMain.on('pet:menu', () => {

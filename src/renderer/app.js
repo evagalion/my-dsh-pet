@@ -686,23 +686,6 @@
     showBubble(d.line || '给你递张小纸条~', { note: d.label || true }, 7000)
   }
   api.on('pet:note', onNote)
-  // 表情包：主进程发请求过来，把「当前在播哪段 + 气泡里那句话」回传给它抽帧叠字
-  function stickerPayload() {
-    return {
-      anim: nameOf(vids[active].src),
-      line: (bubbleText.textContent || '').trim() || '大肥鱼来也~',
-    }
-  }
-  function onStickerRequest() {
-    if (api.makeSticker) api.makeSticker(stickerPayload())
-  }
-  api.on('pet:sticker-request', onStickerRequest)
-  function onStickerResult(r) {
-    if (!r) return
-    if (r.ok) showBubble('表情包存好啦，在「图片/大肥鱼表情包」里找~', null, 4200)
-    else showBubble('表情包没做成：' + (r.error || '未知原因'), null, 4200)
-  }
-  api.on('pet:sticker-result', onStickerResult)
   // 心情变了同步过来，待机链和戳它的反应都看这个
   api.on('pet:mood', (d) => {
     if (d) moodSnap = Object.assign({}, moodSnap, d)
@@ -856,7 +839,6 @@
     let revealOk = null
     let anyVisible = null
     let partProbe = null
-    let stickerProbe = null
     let noteProbe = null
     let speakProbe = null
     if (boot.selftest) {
@@ -1054,15 +1036,6 @@
           }
         }
         partProbe = { bandOk, seen }
-        // 表情包：参数提取要能拿到当前动画名 + 一句非空台词，且 preload 暴露了 makeSticker
-        const sp = stickerPayload()
-        stickerProbe = {
-          hasApi: typeof api.makeSticker === 'function',
-          anim: sp.anim,
-          line: sp.line,
-          animOk: !!sp.anim,
-          lineOk: !!sp.line && sp.line.length > 0,
-        }
         // 递小纸条：强制推一张，验证便签 class / 标签 / 台词都到位
         onNote({ line: '自检便签', anim: null, label: '小纸条' })
         noteProbe = {
@@ -1119,7 +1092,6 @@
           hoverVariety,
           reveal: { revealOk, anyVisible },
           parts: partProbe,
-          sticker: stickerProbe,
           note: noteProbe,
           speak: speakProbe,
         }
