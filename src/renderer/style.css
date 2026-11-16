@@ -110,6 +110,51 @@ body.through #stage {
   transform: translateX(-50%) translateY(0);
 }
 
+/* 小纸条：递关怀时把气泡换成一张淡黄便签，顶上贴条"胶带"，右下角折角 */
+.bubble.note {
+  background: linear-gradient(135deg, #fff8d6 0%, #fff2b8 100%);
+  border: 1px solid #e6d486;
+  color: #5a4a1e;
+  box-shadow: 0 3px 10px rgba(120, 100, 20, 0.2);
+  padding: 12px 14px 10px;
+  font: 500 13px/1.6 "Kaiti SC", "STKaiti", "PingFang SC", sans-serif;
+}
+.bubble.note::before {
+  /* 顶上的一段半透明胶带 */
+  content: "";
+  position: absolute;
+  top: -6px;
+  left: 50%;
+  width: 44px;
+  height: 14px;
+  transform: translateX(-50%) rotate(-3deg);
+  background: rgba(255, 255, 255, 0.55);
+  border-left: 1px dashed rgba(0, 0, 0, 0.06);
+  border-right: 1px dashed rgba(0, 0, 0, 0.06);
+}
+.bubble.note::after {
+  /* 右下角折角 */
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 14px;
+  height: 14px;
+  background: linear-gradient(135deg, transparent 50%, #e9d98f 50%);
+  border-bottom-right-radius: 10px;
+}
+.note-tag {
+  display: none;
+}
+.bubble.note .note-tag {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  color: #b09b3e;
+}
+
 .bubble .head {
   display: flex;
   align-items: center;

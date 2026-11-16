@@ -11,6 +11,7 @@
   const bubbleWhat = document.getElementById('bubble-what')
   const bubbleMeta = document.getElementById('bubble-meta')
   const bubbleStep = document.getElementById('bubble-step')
+  const noteTag = document.getElementById('bubble-note-tag')
 
   let cfg = null
   let pool = null
@@ -300,6 +301,9 @@
     bubbleMeta.style.display = meta ? 'block' : 'none'
 
     bubbleText.textContent = text || ''
+    // 便签样式是"一次性"的：这次显示完（含被下一次普通气泡打断）就恢复成普通气泡
+    bubble.classList.toggle('note', !!s.note)
+    if (s.note) noteTag.textContent = s.note === true ? '小纸条' : s.note
     bubble.classList.add('show')
     if (ms > 0) bubbleTimer = setTimeout(hideBubble, ms)
   }
@@ -307,6 +311,7 @@
   function hideBubble() {
     clearTimeout(bubbleTimer)
     bubble.classList.remove('show')
+    bubble.classList.remove('note')
   }
 
   function squish() {
@@ -501,7 +506,7 @@
     const dur = performance.now() - downAt
     if (movedDist < 8 && dur < 400) {
       api.dragEnd()
-      poke()
+      poke(partAt(e.clientY))
       return
     }
 
@@ -541,7 +546,21 @@
     return null
   }
 
-  function poke() {
+  // 落点落在命中区的哪一段：上=摸头 / 中=揉肚子 / 下=拽尾巴。
+  // 用 clientY 相对命中区的位置算，窗口被拖到屏幕任何角落都对
+  function partAt(clientY) {
+    const p = (cfg.click || {}).parts || {}
+    if (p.enabled === false) return null
+    const r = hit.getBoundingClientRect()
+    if (!r.height) return null
+    const y = (clientY - r.top) / r.height
+    const [b1, b2] = p.bands || [0.34, 0.68]
+    if (y < b1) return 'head'
+    if (y < b2) return 'belly'
+    return 'tail'
+  }
+
+  function poke(part) {
     api.click() // 点一下出声。音效在主进程播，不经过渲染层
     api.bond('poke') // 戳一下涨一点亲密度
     const rule = clickRule()
@@ -551,6 +570,18 @@
       })
       squish()
       showBubble(pickNoRepeat(rule.lines, `click:${rule.when}`) || '', null, 2600)
+      return
+    }
+    // 分部位摸：特殊状态（赌气/久别/心情）优先在上面，普通戳才按落点分头/肚/尾。
+    // 右键菜单那种没坐标的 poke() 传进来是 undefined，退回原来的兜底池
+    const parts = (cfg.click || {}).parts || {}
+    const one = part && parts[part]
+    if (one && one.anims && one.anims.length) {
+      play(pickNoRepeat(one.anims, 'anim:part-' + part) || pickWeighted(), {
+        onEnd: () => nextIdle(),
+      })
+      squish()
+      showBubble(pickNoRepeat(one.lines, `part:${part}`) || '', null, 2600)
       return
     }
     // 兜底池写在配置里：以前只有 5 段「点击回应-*」，来回来去就那几个动作。
@@ -628,6 +659,50 @@
   }
 
   api.on('pet:feed', onFeed)
+  // 猜拳：菜单里玩家出了手，主进程判完结果推过来。播对应动画 + 一句台词
+  function onRps(d) {
+    if (!d) return
+    const r = cfg.rps || {}
+    const branch = r[d.result] || {}
+    manualUntil = Date.now() + 6000
+    phase = 'idle'
+    clearTimeout(phaseTimer)
+    play(pickNoRepeat(branch.anims, 'anim:rps-' + d.result) || pickWeighted(), {
+      onEnd: () => nextIdle(),
+    })
+    squish()
+    const label = { win: '你赢了', lose: '你输了', draw: '平局' }[d.result] || d.result
+    const line = pickNoRepeat(branch.lines, 'rps:' + d.result) || ''
+    showBubble(`${label}（${d.mine} vs ${d.theirs}）· ${line}`, null, 3200)
+  }
+  api.on('pet:rps', onRps)
+  // 递小纸条：主进程判定到点了 / 菜单手动点了，推过来一张关怀便签
+  function onNote(d) {
+    if (!d) return
+    manualUntil = Date.now() + 7000
+    phase = 'idle'
+    clearTimeout(phaseTimer)
+    if (d.anim) play(d.anim, { onEnd: () => nextIdle() })
+    showBubble(d.line || '给你递张小纸条~', { note: d.label || true }, 7000)
+  }
+  api.on('pet:note', onNote)
+  // 表情包：主进程发请求过来，把「当前在播哪段 + 气泡里那句话」回传给它抽帧叠字
+  function stickerPayload() {
+    return {
+      anim: nameOf(vids[active].src),
+      line: (bubbleText.textContent || '').trim() || '大肥鱼来也~',
+    }
+  }
+  function onStickerRequest() {
+    if (api.makeSticker) api.makeSticker(stickerPayload())
+  }
+  api.on('pet:sticker-request', onStickerRequest)
+  function onStickerResult(r) {
+    if (!r) return
+    if (r.ok) showBubble('表情包存好啦，在「图片/大肥鱼表情包」里找~', null, 4200)
+    else showBubble('表情包没做成：' + (r.error || '未知原因'), null, 4200)
+  }
+  api.on('pet:sticker-result', onStickerResult)
   // 心情变了同步过来，待机链和戳它的反应都看这个
   api.on('pet:mood', (d) => {
     if (d) moodSnap = Object.assign({}, moodSnap, d)
@@ -768,6 +843,9 @@
     let hoverVariety = null
     let revealOk = null
     let anyVisible = null
+    let partProbe = null
+    let stickerProbe = null
+    let noteProbe = null
     if (boot.selftest) {
       try {
         poke() // 普通戳一下（亲密度台词分支）
@@ -939,6 +1017,47 @@
         revealOk =
           targetVid.classList.contains('show') && !otherVid.classList.contains('show')
         anyVisible = vids.some((v) => v.classList.contains('show'))
+        // 分部位摸：命中区分三段，各段落点要判断对，且播的是该部位配的动画。
+        // 心情压到 calm、亲密度压低、刚理过它（不触发 clickRule 的任何规则）
+        const pr = hit.getBoundingClientRect()
+        const partsCfg = (cfg.click || {}).parts || {}
+        const seen = {}
+        const bandOk = {}
+        for (const key of ['head', 'belly', 'tail']) {
+          const frac = key === 'head' ? 0.15 : key === 'belly' ? 0.5 : 0.9
+          const p = partAt(pr.top + pr.height * frac)
+          bandOk[key] = p === key
+          moodSnap = Object.assign({}, moodSnap, {
+            sulking: false,
+            mood: 'calm',
+            bond: 30,
+            lastAt: Date.now(),
+          })
+          poke(p)
+          seen[key] = {
+            anim: nameOf(vids[active].src),
+            inPool: ((partsCfg[key] || {}).anims || []).includes(nameOf(vids[active].src)),
+            line: bubbleText.textContent,
+          }
+        }
+        partProbe = { bandOk, seen }
+        // 表情包：参数提取要能拿到当前动画名 + 一句非空台词，且 preload 暴露了 makeSticker
+        const sp = stickerPayload()
+        stickerProbe = {
+          hasApi: typeof api.makeSticker === 'function',
+          anim: sp.anim,
+          line: sp.line,
+          animOk: !!sp.anim,
+          lineOk: !!sp.line && sp.line.length > 0,
+        }
+        // 递小纸条：强制推一张，验证便签 class / 标签 / 台词都到位
+        onNote({ line: '自检便签', anim: null, label: '小纸条' })
+        noteProbe = {
+          noteClass: bubble.classList.contains('note'),
+          tag: noteTag.textContent,
+          line: bubbleText.textContent,
+        }
+        hideBubble() // 自检跑完把便签样式收掉
         const hr = hit.getBoundingClientRect()
         const hitInfo = {
           stage: getComputedStyle(stage).pointerEvents,
@@ -978,6 +1097,9 @@
           clickVariety,
           hoverVariety,
           reveal: { revealOk, anyVisible },
+          parts: partProbe,
+          sticker: stickerProbe,
+          note: noteProbe,
         }
       } catch (e) {
         probe = { error: String((e && e.message) || e) }

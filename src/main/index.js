@@ -12,6 +12,7 @@ const { createTray } = require('./tray')
 const { createFlight, step } = require('../shared/physics')
 const { classify, menuGroups } = require('../shared/animations')
 const sfx = require('./sfx')
+const sticker = require('./sticker')
 const feed = require('./feed')
 const mood = require('./mood')
 const calendar = require('./calendar')
@@ -20,6 +21,7 @@ const coins = require('./coins')
 const digest = require('./digest')
 const achieve = require('./achieve')
 const lonely = require('./lonely')
+const note = require('./note')
 
 const pick = (arr) => (arr && arr.length ? arr[Math.floor(Math.random() * arr.length)] : null)
 
@@ -286,6 +288,62 @@ function coinsMenuItems() {
   ]
 }
 
+// 表情包：先问渲染层当前在播哪段、说了啥，拿到后由 sticker 模块抽帧叠字导出
+function stickerMenuItems() {
+  if ((cfg.sticker || {}).enabled === false) return []
+  return [{ label: '做张表情包', click: () => win && win.webContents.send('pet:sticker-request') }]
+}
+
+// 递小纸条：手动点一张关怀便签（自动的那张由 tick 里的 applyNote 负责）
+function noteMenuItems() {
+  if ((cfg.note || {}).enabled === false) return []
+  return [
+    {
+      label: '递张小纸条',
+      click: () => {
+        const d = note.force(cfg)
+        if (d && win && !win.isDestroyed()) win.webContents.send('pet:note', d)
+      },
+    },
+  ]
+}
+
+// 猜拳规则：石头砸剪刀、剪刀布、布包石头。抽成纯函数好自检
+function rpsDecide(mine, theirs) {
+  const beats = { 石头: '剪刀', 剪刀: '布', 布: '石头' }
+  if (theirs === mine) return 'draw'
+  return beats[mine] === theirs ? 'win' : 'lose'
+}
+
+// 猜拳：玩家出手，它随机出手，判胜负后推给渲染层播动画+台词，顺手记一笔小金库
+function rpsMenuItems() {
+  const r = cfg.rps || {}
+  if (r.enabled === false) return []
+  const hands = r.hands && r.hands.length ? r.hands : ['石头', '剪刀', '布']
+  return [
+    {
+      label: '猜个拳',
+      submenu: hands.map((mine) => ({
+        label: `我出${mine}`,
+        click: () => {
+          const theirs = hands[Math.floor(Math.random() * hands.length)]
+          const result = rpsDecide(mine, theirs)
+          // 赢+币 输-币，平局不动。note 里带 gift 判定，攒够照样拆礼物
+          if (result === 'win' || result === 'lose') {
+            const gain = coins.note(cfg, result === 'win' ? 'success' : 'error')
+            if (gain && gain.gift) {
+              const gift = (cfg.coins || {}).giftAnims || []
+              if (gift.length && win) win.webContents.send('pet:play', gift[Math.floor(Math.random() * gift.length)])
+            }
+            pushMood()
+          }
+          if (win) win.webContents.send('pet:rps', { mine, theirs, result })
+        },
+      })),
+    },
+  ]
+}
+
 // 成就：判定需要的四个数字分散在 mood / coins / digest 里，这里凑齐了一次性喂进去
 function checkAchievements() {
   const now = Date.now()
@@ -434,6 +492,9 @@ async function buildMenuTemplate() {
     },
     { type: 'separator' },
     { label: '摸一下', click: () => win.webContents.send('pet:poke') },
+    ...rpsMenuItems(),
+    ...stickerMenuItems(),
+    ...noteMenuItems(),
     ...feedMenuItems(),
     ...coinsMenuItems(),
     ...digestMenuItems(),
@@ -627,6 +688,13 @@ function applyLonely(all, now) {
   }
 }
 
+// 你在忙的时候，隔一阵子递一张关怀小纸条（便签样式）
+function applyNote(all, now) {
+  if (!win || win.isDestroyed()) return
+  const d = note.watch(cfg, all, now)
+  if (d) win.webContents.send('pet:note', d)
+}
+
 // 今天过不过节。一天只会变一次，所以按日期缓存，变了才推给渲染层
 let occasionDay = ''
 function applyOccasion(now) {
@@ -752,14 +820,42 @@ app.whenReady().then(() => {
       .then((tpl) => {
         if (!tpl || !tpl.items) return finish({ menuBuilt: false, menuError: '菜单构建超时/无结果' })
         const bad = []
+        const labels = []
         const walk = (items) => {
           for (const it of items || []) {
             if (it.label != null && typeof it.label !== 'string') bad.push(String(it.label))
+            if (typeof it.label === 'string') labels.push(it.label)
             walk(it.submenu && it.submenu.items)
           }
         }
         walk(tpl.items)
-        finish({ menuBuilt: true, menuItems: tpl.items.length, menuBadLabels: bad })
+        // 猜拳判定：三种互克 + 平局都要对
+        const rpsCheck = {
+          石头剪刀: rpsDecide('石头', '剪刀') === 'win',
+          剪刀布: rpsDecide('剪刀', '布') === 'win',
+          布石头: rpsDecide('布', '石头') === 'win',
+          石头石頭: rpsDecide('石头', '石头') === 'draw',
+          石头布: rpsDecide('石头', '布') === 'lose',
+        }
+        // 递纸条判定：没在忙不递、没到间隔不递、到点了才递
+        const ncfg = Object.assign({}, cfg, { note: { enabled: true, everyMs: 1000 } })
+        const noteCheck = {
+          idleBusy: note.shouldFire(ncfg, 0, false, 5000) === false,
+          tooSoon: note.shouldFire(ncfg, 4500, true, 5000) === false,
+          dueTime: note.shouldFire(ncfg, 3000, true, 5000) === true,
+          firstTime: note.shouldFire(ncfg, 0, true, 5000) === true,
+        }
+        finish({
+          menuBuilt: true,
+          menuItems: tpl.items.length,
+          menuBadLabels: bad,
+          rps: rpsCheck,
+          rpsAllOk: Object.values(rpsCheck).every(Boolean),
+          stickerMenuOk: labels.includes('做张表情包'),
+          noteMenuOk: labels.includes('递张小纸条'),
+          note: noteCheck,
+          noteAllOk: Object.values(noteCheck).every(Boolean),
+        })
       })
       .catch((e) => finish({ menuBuilt: false, menuError: String((e && e.message) || e).slice(0, 400) }))
   })
@@ -772,6 +868,11 @@ app.whenReady().then(() => {
   ipcMain.on('pet:drag-end', () => persistPosition())
   // 点一下鱼身：播随机点击音效。渲染层已经判过「没拖动」了，这里只管出声
   ipcMain.on('pet:click', () => sfx.click(cfg))
+  // 表情包：渲染层回传当前动画+台词，生成后把结果/错误报回给它弹气泡
+  ipcMain.on('pet:sticker-make', async (_e, d) => {
+    const r = await sticker.make(d && d.anim, d && d.line)
+    if (win && !win.isDestroyed()) win.webContents.send('pet:sticker-result', r)
+  })
   // 戳它 / 喂它都涨亲密度。渲染层戳的时候顺手报一下
   ipcMain.on('pet:bond', (_e, kind) => bumpBond(kind === 'feed' ? 'feed' : 'poke'))
   ipcMain.on('pet:menu', () => {
@@ -814,6 +915,7 @@ app.whenReady().then(() => {
           applyRoutine(all, now)
           applyOccasion(now)
           applyLonely(all, now)
+          applyNote(all, now)
         })
         .catch(() => {})
     }

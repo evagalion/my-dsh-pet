@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('petAPI', {
   walk: (dist, ms) => ipcRenderer.send('pet:walk', dist, ms),
   selftest: (data) => ipcRenderer.send('pet:selftest', data),
   debug: (data) => ipcRenderer.send('pet:debug', data),
+  makeSticker: (d) => ipcRenderer.send('pet:sticker-make', d),
   on: (channel, fn) => {
     const valid = [
       'pet:state',
@@ -28,6 +29,10 @@ contextBridge.exposeInMainWorld('petAPI', {
       'pet:digest',
       'pet:occasion',
       'pet:lonely',
+      'pet:rps',
+      'pet:note',
+      'pet:sticker-request',
+      'pet:sticker-result',
       'pet:landed',
       'pet:speak',
       'pet:play',
