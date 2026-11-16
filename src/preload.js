@@ -32,6 +32,7 @@ contextBridge.exposeInMainWorld('petAPI', {
       'pet:note',
       'pet:landed',
       'pet:speak',
+      'pet:chat',
       'pet:play',
       'pet:walk-done',
       'pet:reload-config',

@@ -5,13 +5,14 @@ const fs = require('node:fs')
 const path = require('node:path')
 const { execFile } = require('node:child_process')
 
-const { loadConfig, saveConfig, listAssets } = require('./config')
+const { loadConfig, saveConfig, listAssets, loadChatConfig, saveChatConfig } = require('./config')
 const { ASSETS_DIR, ROOT } = require('./paths')
 const { createWatcher } = require('./watcher')
 const { createTray } = require('./tray')
 const { createFlight, step } = require('../shared/physics')
 const { classify, menuGroups } = require('../shared/animations')
 const sfx = require('./sfx')
+const chat = require('./chat')
 const feed = require('./feed')
 const mood = require('./mood')
 const calendar = require('./calendar')
@@ -48,6 +49,7 @@ function selftestDone(extra) {
 }
 
 let win = null
+let chatWin = null
 let cfg = null
 let pools = null
 let watcher = null
@@ -124,6 +126,63 @@ function createWindow() {
       } catch {}
     }, 1500)
   }
+}
+
+// ---- 聊天窗口 ----
+// 桌宠窗口 focusable:false 放不了输入框，聊天用独立窗口。单例，关了再开重新建。
+function chatHint() {
+  const cc = loadChatConfig()
+  const on = cfg.chat && cfg.chat.enabled !== false && cc.enabled && cc.baseUrl && cc.apiKey
+  return on
+    ? '回车发送 · 在线模式（大模型）'
+    : '回车发送 · 离线模式（没配模型，也能聊）'
+}
+
+function openChatWindow() {
+  if (chatWin && !chatWin.isDestroyed()) {
+    chatWin.show()
+    chatWin.focus()
+    return
+  }
+  const wa = screen.getPrimaryDisplay().workArea
+  const cw = 380
+  const ch = 520
+  // 默认放在工作区右侧、偏下，避开正中间
+  const x = Math.round(wa.x + wa.width - cw - 60)
+  const y = Math.round(wa.y + wa.height - ch - 40)
+  chatWin = new BrowserWindow({
+    x,
+    y,
+    width: cw,
+    height: ch,
+    minWidth: 300,
+    minHeight: 360,
+    title: '和大肥鱼聊天',
+    backgroundColor: '#f7f5ef',
+    webPreferences: {
+      preload: path.join(__dirname, '..', 'chat-preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  })
+  chatWin.loadFile(path.join(__dirname, '..', 'renderer', 'chat.html'))
+  chatWin.on('closed', () => {
+    chatWin = null
+  })
+}
+
+// 组装当前状态上下文，喂给 chat.reply 让回答能带上"我在干嘛"
+function chatContext() {
+  const ag = agentOf(lastKnown.source)
+  const phase = labelOf(lastKnown.phase)
+  const what = whatOf(lastKnown)
+  return { agentLabel: ag.label, phaseLabel: phase, what }
+}
+
+// 合并 shared 的 chat 段 + 用户私有的模型配置，给 chat.reply 用
+function chatConfig() {
+  const cc = loadChatConfig()
+  return Object.assign({}, cfg.chat || {}, cc)
 }
 
 // 鼠标穿透：开启后整窗彻底不接收鼠标事件，鱼变成纯装饰，鼠标直接穿过去点到下面的窗口。
@@ -573,6 +632,7 @@ async function buildMenuTemplate() {
       enabled: false,
     },
     { type: 'separator' },
+    { label: '💬 跟它聊聊', click: () => openChatWindow() },
     { label: '摸一下', click: () => win.webContents.send('pet:poke') },
     ...rpsMenuItems(),
     ...noteMenuItems(),
@@ -900,13 +960,29 @@ app.whenReady().then(() => {
           noPlaceholder: !/\{(agent|phase|what)\}/.test(speakBusy),
           hasAgent: /Cursor/.test(speakBusy),
         }
-        // 菜单精简：顶层要短（≤14），三个分组都在，高频互动仍在顶层。
+        // 菜单精简：顶层要短（≤15），三个分组都在，高频互动仍在顶层。
         // 防止以后往顶层堆功能又变回几十项的"臃肿菜单"。
         const topLabels = tpl.items.map((it) => it.label).filter((x) => typeof x === 'string')
         const layoutCheck = {
-          topShort: tpl.items.length <= 14,
+          topShort: tpl.items.length <= 15,
           hasGroups: ['状态', '打开', '设置'].every((g) => topLabels.includes(g)),
           coreOnTop: ['摸一下', '它在干嘛？'].every((g) => topLabels.includes(g)),
+          chatOnTop: topLabels.some((x) => x && x.indexOf('聊聊') >= 0),
+        }
+        // 对话：意图命中 + 离线兜底 + 上下文替换。不依赖网络，纯函数断言。
+        const cGreet = chat.matchIntent('你好呀')
+        const cStatus = chat.offlineReply('你在干嘛', {
+          agentLabel: 'WorkBuddy',
+          phaseLabel: '工作中',
+          what: '自检项目',
+        })
+        const cUnknown = chat.offlineReply('asdfghjkl随机乱码', {})
+        const chatCheck = {
+          greetHit: !!cGreet && cGreet.id === 'greet',
+          jokeHit: (chat.matchIntent('讲个笑话') || {}).id === 'joke',
+          statusFilled: !!cStatus.line && !/\{(agent|phase|what)\}/.test(cStatus.line),
+          fallbackOk: !!cUnknown.line && !!cUnknown.anim,
+          quickAsks: chat.quickAsks(cfg).length > 0,
         }
         finish({
           menuBuilt: true,
@@ -923,6 +999,9 @@ app.whenReady().then(() => {
           noteMenuOk: labels.includes('递张小纸条'),
           note: noteCheck,
           noteAllOk: Object.values(noteCheck).every(Boolean),
+          chat: { greet: cGreet && cGreet.id, status: cStatus.line, fallback: cUnknown.line },
+          chatAllOk: Object.values(chatCheck).every(Boolean),
+          chatCheck,
         })
       })
       .catch((e) => finish({ menuBuilt: false, menuError: String((e && e.message) || e).slice(0, 400) }))
@@ -944,9 +1023,42 @@ app.whenReady().then(() => {
       .then(() => showMenu())
       .catch((e) => console.error('[pet] 右键菜单构建失败：', e))
   })
+  // 聊天窗口：请求初始化信息（快捷话题 / 模式提示）
+  ipcMain.on('chat:ready', () => {
+    if (!chatWin || chatWin.isDestroyed()) return
+    chatWin.webContents.send('chat:init', {
+      quickAsks: chat.quickAsks(cfg),
+      hint: chatHint(),
+    })
+  })
+  // 玩家发话 → chat.reply 拿回答 → 桌宠表演 + 回显给聊天窗
+  ipcMain.on('chat:send', async (_e, text) => {
+    let r
+    try {
+      r = await chat.reply(chatConfig(), text, chatContext())
+    } catch (e) {
+      if (chatWin && !chatWin.isDestroyed())
+        chatWin.webContents.send('chat:error', { error: String((e && e.message) || e).slice(0, 120) })
+      return
+    }
+    // 桌宠：播动画 + 气泡 + 语音
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('pet:chat', { line: r.line, anim: r.anim, online: r.online })
+    }
+    if (r.line) sfx.speakText(cfg, r.line)
+    // 聊天窗：显示这条回复
+    if (chatWin && !chatWin.isDestroyed()) chatWin.webContents.send('chat:reply', r)
+  })
+  ipcMain.on('chat:close', () => {
+    if (chatWin && !chatWin.isDestroyed()) chatWin.close()
+  })
+  ipcMain.on('chat:clear', () => {
+    /* 对话记录只在渲染层内存里，清空由渲染层自己做，这里留通道备扩展 */
+  })
   ipcMain.on('pet:quit', () => app.quit())
 
   tray = createTray({
+    chat: () => openChatWindow(),
     poke: () => win && win.webContents.send('pet:poke'),
     speak: () => win && speakNow(),
     reset: () => win && resetPosition(),

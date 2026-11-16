@@ -21,6 +21,7 @@ function createTray(actions) {
   // 切换后要重建菜单，不然文案还停在旧状态上
   const build = () =>
     Menu.buildFromTemplate([
+      { label: '💬 跟它聊聊', click: actions.chat },
       { label: '摸一下', click: actions.poke },
       { label: '它在干嘛？', click: actions.speak },
       { type: 'separator' },

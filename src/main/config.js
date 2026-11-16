@@ -49,6 +49,52 @@ function saveConfig(cfg) {
   }
 }
 
+// 对话配置（可能含 apiKey）单独存 chat.json，不混进 pet.config.json。
+// 打包发给别人时这个文件不存在 → 自动走离线意图库，不影响使用。
+function chatConfigPath() {
+  return path.join(app.getPath('userData'), 'chat.json')
+}
+
+function loadChatConfig() {
+  try {
+    const o = JSON.parse(fs.readFileSync(chatConfigPath(), 'utf8'))
+    return {
+      enabled: o.enabled !== false,
+      baseUrl: String(o.baseUrl || ''),
+      apiKey: String(o.apiKey || ''),
+      model: String(o.model || 'deepseek-chat'),
+      timeoutMs: Number(o.timeoutMs) || 12000,
+    }
+  } catch {
+    return { enabled: true, baseUrl: '', apiKey: '', model: 'deepseek-chat', timeoutMs: 12000 }
+  }
+}
+
+function saveChatConfig(cc) {
+  try {
+    fs.mkdirSync(path.dirname(chatConfigPath()), { recursive: true })
+    fs.writeFileSync(
+      chatConfigPath(),
+      JSON.stringify(
+        {
+          enabled: cc.enabled !== false,
+          baseUrl: String(cc.baseUrl || ''),
+          apiKey: String(cc.apiKey || ''),
+          model: String(cc.model || 'deepseek-chat'),
+          timeoutMs: Number(cc.timeoutMs) || 12000,
+        },
+        null,
+        2
+      ),
+      'utf8'
+    )
+    return true
+  } catch (e) {
+    console.error('[pet] 保存对话配置失败', e.message)
+    return false
+  }
+}
+
 function listAssets() {
   try {
     return fs
@@ -61,4 +107,13 @@ function listAssets() {
   }
 }
 
-module.exports = { loadConfig, saveConfig, listAssets, userConfigPath, ASSETS_DIR }
+module.exports = {
+  loadConfig,
+  saveConfig,
+  listAssets,
+  userConfigPath,
+  chatConfigPath,
+  loadChatConfig,
+  saveChatConfig,
+  ASSETS_DIR,
+}

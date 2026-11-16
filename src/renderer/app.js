@@ -775,6 +775,18 @@
     showBubble(d.line || '我在呢~', null, 5000)
   }
   api.on('pet:speak', onSpeak)
+  // 聊天回答：跟 onSpeak 类似，但留久一点，气泡开头挂个"聊"标记区分状态汇报
+  function onChat(d) {
+    if (!d) return
+    manualUntil = Date.now() + 7000
+    phase = 'idle'
+    clearTimeout(phaseTimer)
+    clearRotate()
+    if (d.anim) play(d.anim, { onEnd: () => nextIdle() })
+    squish()
+    showBubble(d.line || '…', null, 6500)
+  }
+  api.on('pet:chat', onChat)
   api.on('pet:reload-config', (payload) => {
     cfg = payload.config || cfg
     if (payload.pools) pool = payload.pools
@@ -841,6 +853,7 @@
     let partProbe = null
     let noteProbe = null
     let speakProbe = null
+    let chatProbe = null
     if (boot.selftest) {
       try {
         poke() // 普通戳一下（亲密度台词分支）
@@ -1052,6 +1065,13 @@
           notNote: !bubble.classList.contains('note'),
         }
         hideBubble()
+        // 聊天：强制推一句回答，验证气泡显示正确文本
+        onChat({ line: '自检聊天回答', anim: null, online: false })
+        chatProbe = {
+          shown: bubble.classList.contains('show'),
+          line: bubbleText.textContent,
+        }
+        hideBubble()
         const hr = hit.getBoundingClientRect()
         const hitInfo = {
           stage: getComputedStyle(stage).pointerEvents,
@@ -1094,6 +1114,7 @@
           parts: partProbe,
           note: noteProbe,
           speak: speakProbe,
+          chat: chatProbe,
         }
       } catch (e) {
         probe = { error: String((e && e.message) || e) }

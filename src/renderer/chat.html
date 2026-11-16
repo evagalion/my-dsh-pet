@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self'" />
+    <link rel="stylesheet" href="chat.css" />
+  </head>
+  <body>
+    <div class="win">
+      <header class="titlebar">
+        <div class="brand">
+          <span class="dot"></span>
+          <span>和大肥鱼聊天</span>
+        </div>
+        <div class="tools">
+          <button id="clear" class="tbtn" title="清空对话">清空</button>
+          <button id="close" class="tbtn close" title="关闭">×</button>
+        </div>
+      </header>
+
+      <div id="log" class="log">
+        <div class="hello" id="hello">
+          <div class="hi-emoji">🐳</div>
+          <div class="hi-title">嗨，我是大肥鱼~</div>
+          <div class="hi-sub">随口聊两句吧，我在呢</div>
+        </div>
+      </div>
+
+      <div id="quick" class="quick"></div>
+
+      <form id="form" class="composer">
+        <input id="input" type="text" autocomplete="off" placeholder="跟它说点什么…" maxlength="200" />
+        <button id="send" type="submit" class="send">发送</button>
+      </form>
+      <div class="hint" id="hint">回车发送 · 没配模型也能聊（离线模式）</div>
+    </div>
+    <script src="chat.js"></script>
+  </body>
+</html>
