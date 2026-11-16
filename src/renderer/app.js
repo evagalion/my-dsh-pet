@@ -779,7 +779,19 @@
   api.on('pet:state', onState)
   api.on('pet:poke', poke)
   api.on('pet:landed', land)
-  api.on('pet:speak', (s) => onState(Object.assign({}, s, { force: true })))
+  // 「它在干嘛？」专属响应：冒一句汇报 + 播个动作 + Q 弹。
+  // 不再走 onState(force)——那样 idle 会把气泡藏掉、忙碌又显示原台词，等于没反应。
+  function onSpeak(d) {
+    if (!d) return
+    manualUntil = Date.now() + 6000
+    phase = 'idle'
+    clearTimeout(phaseTimer)
+    clearRotate()
+    if (d.anim) play(d.anim, { onEnd: () => nextIdle() })
+    squish()
+    showBubble(d.line || '我在呢~', null, 5000)
+  }
+  api.on('pet:speak', onSpeak)
   api.on('pet:reload-config', (payload) => {
     cfg = payload.config || cfg
     if (payload.pools) pool = payload.pools
@@ -846,6 +858,7 @@
     let partProbe = null
     let stickerProbe = null
     let noteProbe = null
+    let speakProbe = null
     if (boot.selftest) {
       try {
         poke() // 普通戳一下（亲密度台词分支）
@@ -1058,6 +1071,14 @@
           line: bubbleText.textContent,
         }
         hideBubble() // 自检跑完把便签样式收掉
+        // 「它在干嘛？」：强制推一句汇报，验证气泡确实显示、且是汇报文本、没误带便签样式
+        onSpeak({ line: '自检汇报', anim: null, phase: 'idle' })
+        speakProbe = {
+          shown: bubble.classList.contains('show'),
+          line: bubbleText.textContent,
+          notNote: !bubble.classList.contains('note'),
+        }
+        hideBubble()
         const hr = hit.getBoundingClientRect()
         const hitInfo = {
           stage: getComputedStyle(stage).pointerEvents,
@@ -1100,6 +1121,7 @@
           parts: partProbe,
           sticker: stickerProbe,
           note: noteProbe,
+          speak: speakProbe,
         }
       } catch (e) {
         probe = { error: String((e && e.message) || e) }

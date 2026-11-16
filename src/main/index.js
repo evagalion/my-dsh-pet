@@ -607,16 +607,50 @@ function labelOf(phase) {
   return m[phase] || phase
 }
 
+// 「它在干嘛？」：不受 poll 去重影响，先当场探一次，探不到就用上次记住的。
+// 关键是给它一句**专属汇报台词**——早先复用 onState(force)，idle 时反而把气泡
+// 藏了、忙碌时又显示原来那句，用户点下去几乎看不出变化，等于没反应。
 function speakNow() {
   if (!watcher) return
-  watcher.poll().then((s) => {
-    if (s) pushState(s, true)
-    else
-      win.webContents.send(
-        'pet:speak',
-        Object.assign({}, lastKnown, { force: true })
-      )
-  })
+  Promise.resolve()
+    .then(() => watcher.poll())
+    .then((s) => {
+      const cur = s || lastKnown
+      const line = reportLine(cfg, cur)
+      const anim = pick(((cfg.speak || {}).anims) || [])
+      win.webContents.send('pet:speak', {
+        line,
+        anim,
+        source: cur.source,
+        phase: cur.phase,
+        title: cur.title,
+        project: cur.project,
+      })
+      if (line) sfx.speakText(cfg, line)
+    })
+    .catch(() => {
+      // 探测异常也不能让它沉默，至少用上次状态报一句
+      const line = reportLine(cfg, lastKnown)
+      win.webContents.send('pet:speak', { line, anim: pick(((cfg.speak || {}).anims) || []) })
+      if (line) sfx.speakText(cfg, line)
+    })
+}
+
+// 把当前状态拼成一句"汇报"。idle 和忙碌各用一池，忙碌的台词带 agent/档位/问题占位符。
+// 抽成纯函数好自检——用户抱怨"没反应"时，能直接验证这个函数一定吐出非空台词。
+function reportLine(cfg, cur) {
+  const sc = (cfg && cfg.speak) || {}
+  const c = cur || {}
+  const ph = c.phase || 'idle'
+  const ag = ((cfg && cfg.agents) || {})[c.source]
+  const agLabel = ag && ag.label ? ag.label : ''
+  const phaseLabel = (((cfg && cfg.phases) || {})[ph] || {}).label || ph
+  const what = String(c.title || c.project || '').trim()
+  if (ph === 'idle') return String(pick(sc.idleLines) || '现在没在忙，我摸鱼呢~')
+  return String(pick(sc.busyLines) || '{agent}正在{phase}，我盯着呢~')
+    .replace('{agent}', agLabel || '它')
+    .replace('{phase}', phaseLabel)
+    .replace('{what}', what ? '：' + what : '')
 }
 
 function resetPosition() {
@@ -845,10 +879,26 @@ app.whenReady().then(() => {
           dueTime: note.shouldFire(ncfg, 3000, true, 5000) === true,
           firstTime: note.shouldFire(ncfg, 0, true, 5000) === true,
         }
+        // 「它在干嘛？」汇报台词：idle 和忙碌都要非空，且忙碌时占位符要被替换掉
+        const speakIdle = reportLine(cfg, { phase: 'idle', source: 'none' })
+        const speakBusy = reportLine(cfg, {
+          phase: 'working',
+          source: 'cursor',
+          title: '自检项目',
+        })
+        const speakCheck = {
+          idleNonEmpty: !!speakIdle,
+          busyNonEmpty: !!speakBusy,
+          noPlaceholder: !/\{(agent|phase|what)\}/.test(speakBusy),
+          hasAgent: /Cursor/.test(speakBusy),
+        }
         finish({
           menuBuilt: true,
           menuItems: tpl.items.length,
           menuBadLabels: bad,
+          speak: { idle: speakIdle, busy: speakBusy },
+          speakAllOk: Object.values(speakCheck).every(Boolean),
+          speakCheck,
           rps: rpsCheck,
           rpsAllOk: Object.values(rpsCheck).every(Boolean),
           stickerMenuOk: labels.includes('做张表情包'),
