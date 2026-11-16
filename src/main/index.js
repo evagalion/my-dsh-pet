@@ -395,11 +395,9 @@ function moodMenuItems() {
   return items
 }
 
-// 喂鱼相关菜单项。饱腹度关掉时返回空数组（展开运算符会把它吃掉）
+// 喂点东西：互动操作，留在顶层。饱腹度关掉时返回空数组（展开运算符会吃掉）
 function feedMenuItems() {
-  const v = feed.fullness(cfg)
-  if (v == null) return []
-  const pct = Math.round(v)
+  if (feed.fullness(cfg) == null) return []
   const food = feed.pickFood(cfg)
   const occasion = feed.occasionOf(cfg)
   const label = occasion
@@ -422,9 +420,18 @@ function feedMenuItems() {
         sfx.click(cfg, true) // 喂食也出一声，跟手
       },
     },
-    { label: `饱腹度：${pct}%`, enabled: false },
   ]
 }
+
+// 饱腹度只读展示，归到「状态」子菜单
+function feedStatusItem() {
+  const v = feed.fullness(cfg)
+  if (v == null) return null
+  return { label: `饱腹度：${Math.round(v)}%`, enabled: false }
+}
+
+// 过滤掉 null / false（关闭的功能返回的占位），Electron 模板不接受这些
+const compact = (arr) => arr.filter(Boolean)
 
 function clickThroughLabel() {
   return cfg.pet.clickThrough ? '鼠标穿透：开（点不到我，从托盘图标关）' : '鼠标穿透：关（可以拖我）'
@@ -476,6 +483,88 @@ async function buildMenuTemplate() {
       })
     : [{ label: '都没在跑，一起摸鱼中~', enabled: false }]
 
+  // 状态类（只读 + 查看）——收进「状态」子菜单
+  const statusMenu = {
+    label: '状态',
+    submenu: compact([
+      ...moodMenuItems(),
+      feedStatusItem(),
+      ...coinsMenuItems(),
+      ...digestMenuItems(),
+      ...achieveMenuItems(),
+      { label: '各 agent 状态（点开看各自在忙啥）', submenu: statusItems },
+      stepMenu(),
+    ]),
+  }
+
+  // 打开工具 / 项目——收进「打开」子菜单
+  const cwd = currentCwd()
+  const openMenu = {
+    label: '打开',
+    submenu: compact([
+      { label: '打开 WorkBuddy', click: () => execFile('open', ['-a', 'WorkBuddy'], () => {}) },
+      { label: '打开 Cursor', click: () => execFile('open', ['-a', 'Cursor'], () => {}) },
+      cwd && {
+        label: '用 Cursor 打开当前项目',
+        click: () => execFile('open', ['-a', 'Cursor', cwd], () => {}),
+      },
+      cwd && {
+        label: '在终端打开当前项目',
+        click: () => execFile('open', ['-a', 'Terminal', cwd], () => {}),
+      },
+      cwd && {
+        label: '在访达中显示当前项目',
+        click: () => shell.showItemInFolder(cwd),
+      },
+    ]),
+  }
+
+  // 声音 / 穿透 / 位置 / 重载——收进「设置」子菜单
+  const settingsMenu = {
+    label: '设置',
+    submenu: compact([
+      {
+        label: soundMenuLabel(),
+        click: () => {
+          // 三态循环：语音 → 音效 → 关
+          const cur = sfx.modeOf(cfg)
+          const next = cur === 'voice' ? 'tone' : cur === 'tone' ? 'off' : 'voice'
+          cfg.sound.enabled = next !== 'off'
+          if (next !== 'off') cfg.sound.mode = next
+          saveConfig(cfg)
+          sfx.preview(cfg) // 切完立刻来一句，好确认音色/音量
+        },
+      },
+      sfx.auditionPath() && {
+        label: '挑语音音色…（试听并复制配置）',
+        click: () => shell.openPath(sfx.auditionPath()),
+      },
+      sfx.clickAvailable() && {
+        label: clickMenuLabel(),
+        click: () => {
+          cfg.sound.click = cfg.sound.click || {}
+          cfg.sound.click.enabled = cfg.sound.click.enabled === false
+          saveConfig(cfg)
+          if (cfg.sound.click.enabled !== false) sfx.click(cfg, true) // force：跳过节流
+        },
+      },
+      { label: clickThroughLabel(), click: () => toggleClickThrough() },
+      { label: '回到屏幕右下角', click: () => resetPosition() },
+      {
+        label: '重载配置',
+        click: () => {
+          const assets = listAssets()
+          pools = classify(assets, cfg)
+          sfx.resetEdgeProbe() // python 路径可能刚装好，重新探测一次
+          win.webContents.send('pet:reload-config', { config: cfg, pools })
+          lastMoodJson = '' // 配置可能改了亲密度等级，强制重推一次
+          pushMood()
+        },
+      },
+    ]),
+  }
+
+  // 顶层只留高频互动 + 三个分组，31 项 → 13 项
   return Menu.buildFromTemplate([
     {
       label: `现在：${labelOf(lastKnown.phase)} · ${agentOf(lastKnown.source).label}${
@@ -488,85 +577,12 @@ async function buildMenuTemplate() {
     ...rpsMenuItems(),
     ...noteMenuItems(),
     ...feedMenuItems(),
-    ...coinsMenuItems(),
-    ...digestMenuItems(),
-    ...achieveMenuItems(),
-    ...moodMenuItems(),
     actionMenu(),
     { label: '它在干嘛？', click: () => speakNow() },
-    { label: '各 agent 状态（点开看各自在忙啥）', submenu: statusItems },
-    stepMenu(),
     { type: 'separator' },
-    {
-      label: '打开 WorkBuddy',
-      click: () => execFile('open', ['-a', 'WorkBuddy'], () => {}),
-    },
-    { label: '打开 Cursor', click: () => execFile('open', ['-a', 'Cursor'], () => {}) },
-    {
-      label: '用 Cursor 打开当前项目',
-      enabled: !!currentCwd(),
-      click: () => execFile('open', ['-a', 'Cursor', currentCwd()], () => {}),
-    },
-    {
-      label: '在终端打开当前项目',
-      enabled: !!currentCwd(),
-      click: () => execFile('open', ['-a', 'Terminal', currentCwd()], () => {}),
-    },
-    {
-      label: '在访达中显示当前项目',
-      enabled: !!currentCwd(),
-      click: () => currentCwd() && shell.showItemInFolder(currentCwd()),
-    },
-    { type: 'separator' },
-    { label: '回到屏幕右下角', click: () => resetPosition() },
-    {
-      label: soundMenuLabel(),
-      click: () => {
-        // 三态循环：语音 → 音效 → 关
-        const cur = sfx.modeOf(cfg)
-        const next = cur === 'voice' ? 'tone' : cur === 'tone' ? 'off' : 'voice'
-        cfg.sound.enabled = next !== 'off'
-        if (next !== 'off') cfg.sound.mode = next
-        saveConfig(cfg)
-        sfx.preview(cfg) // 切完立刻来一句，好确认音色/音量
-      },
-    },
-    ...(sfx.auditionPath()
-      ? [
-          {
-            label: '挑语音音色…（试听并复制配置）',
-            click: () => shell.openPath(sfx.auditionPath()),
-          },
-        ]
-      : []),
-    ...(sfx.clickAvailable()
-      ? [
-          {
-            label: clickMenuLabel(),
-            click: () => {
-              cfg.sound.click = cfg.sound.click || {}
-              cfg.sound.click.enabled = cfg.sound.click.enabled === false
-              saveConfig(cfg)
-              if (cfg.sound.click.enabled !== false) sfx.click(cfg, true) // force：跳过节流，切完立刻听效果
-            },
-          },
-        ]
-      : []),
-    {
-      label: clickThroughLabel(),
-      click: () => toggleClickThrough(),
-    },
-    {
-      label: '重载配置',
-      click: () => {
-        const assets = listAssets()
-        pools = classify(assets, cfg)
-        sfx.resetEdgeProbe() // python 路径可能刚装好，重新探测一次
-        win.webContents.send('pet:reload-config', { config: cfg, pools })
-        lastMoodJson = '' // 配置可能改了亲密度等级，强制重推一次
-        pushMood()
-      },
-    },
+    statusMenu,
+    openMenu,
+    settingsMenu,
     { type: 'separator' },
     { label: '退出', click: () => app.quit() },
   ])
@@ -884,9 +900,20 @@ app.whenReady().then(() => {
           noPlaceholder: !/\{(agent|phase|what)\}/.test(speakBusy),
           hasAgent: /Cursor/.test(speakBusy),
         }
+        // 菜单精简：顶层要短（≤14），三个分组都在，高频互动仍在顶层。
+        // 防止以后往顶层堆功能又变回几十项的"臃肿菜单"。
+        const topLabels = tpl.items.map((it) => it.label).filter((x) => typeof x === 'string')
+        const layoutCheck = {
+          topShort: tpl.items.length <= 14,
+          hasGroups: ['状态', '打开', '设置'].every((g) => topLabels.includes(g)),
+          coreOnTop: ['摸一下', '它在干嘛？'].every((g) => topLabels.includes(g)),
+        }
         finish({
           menuBuilt: true,
           menuItems: tpl.items.length,
+          menuTopLabels: topLabels,
+          menuLayoutOk: Object.values(layoutCheck).every(Boolean),
+          menuLayoutCheck: layoutCheck,
           menuBadLabels: bad,
           speak: { idle: speakIdle, busy: speakBusy },
           speakAllOk: Object.values(speakCheck).every(Boolean),
