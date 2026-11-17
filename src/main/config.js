@@ -26,6 +26,7 @@ function loadConfig() {
     if (raw.sound && (raw.sound.mode === 'voice' || raw.sound.mode === 'tone')) {
       cfg.sound.mode = raw.sound.mode
     }
+    if (raw.crawler && typeof raw.crawler.on === 'boolean') cfg.crawler.on = raw.crawler.on
   } catch {
     /* 第一次跑，用默认值 */
   }
@@ -42,6 +43,7 @@ function saveConfig(cfg) {
         enabled: !!(cfg.sound && cfg.sound.enabled !== false),
         mode: (cfg.sound && cfg.sound.mode) === 'tone' ? 'tone' : 'voice',
       },
+      crawler: { on: !!(cfg.crawler && cfg.crawler.on) },
     }
     fs.writeFileSync(userConfigPath(), JSON.stringify(slim, null, 2), 'utf8')
   } catch (e) {

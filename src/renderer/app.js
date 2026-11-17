@@ -303,6 +303,7 @@
     bubbleText.textContent = text || ''
     // 便签样式是"一次性"的：这次显示完（含被下一次普通气泡打断）就恢复成普通气泡
     bubble.classList.toggle('note', !!s.note)
+    bubble.classList.toggle('evolve', !!s.evolve)
     if (s.note) noteTag.textContent = s.note === true ? '小纸条' : s.note
     bubble.classList.add('show')
     if (ms > 0) bubbleTimer = setTimeout(hideBubble, ms)
@@ -312,6 +313,7 @@
     clearTimeout(bubbleTimer)
     bubble.classList.remove('show')
     bubble.classList.remove('note')
+    bubble.classList.remove('evolve')
   }
 
   function squish() {
@@ -787,6 +789,46 @@
     showBubble(d.line || '…', null, 6500)
   }
   api.on('pet:chat', onChat)
+  // 羁绊进化：亲密度跨档时播变身演出。气泡挂个 evolve 标记做金色描边，
+  // 跟普通汇报、小纸条区分开，让「升级」这件事有仪式感。
+  function onEvolve(d) {
+    if (!d) return
+    manualUntil = Date.now() + 9000
+    phase = 'idle'
+    clearTimeout(phaseTimer)
+    clearRotate()
+    if (d.anim) play(d.anim, { onEnd: () => nextIdle() })
+    squish()
+    const perk = d.perkText ? ' · ' + d.perkText : ''
+    showBubble(`${d.formLabel || '新形态'}！${d.line || ''}${perk}`, { evolve: true }, 8000)
+  }
+  api.on('pet:evolve', onEvolve)
+  // 桌面巡游：主进程只在「开始 / 停下 / 换模式」时推，不会每帧打扰渲染层。
+  // 巡游期间长时间屏蔽状态机，别走两步就被「工作中」抢回去；用户一拖鱼就收到 active:false。
+  let crawlMode = null
+  function onCrawl(d) {
+    if (!d) return
+    document.body.classList.toggle('crawling', d.active !== false)
+    document.body.classList.toggle('inverted', !!d.inverted)
+    if (d.active === false) {
+      crawlMode = null
+      manualUntil = 0
+      return
+    }
+    crawlMode = d.mode || 'floor'
+    manualUntil = Date.now() + 60000
+    phase = 'idle'
+    clearTimeout(phaseTimer)
+    clearRotate()
+    hideBubble() // 倒挂时气泡会跟着翻，干脆不显示
+    const c = cfg.crawler || {}
+    if (d.inverted) {
+      play(pickNoRepeat(c.hangAnims, 'anim:crawl-hang') || '待机呼吸休闲', { loop: true })
+    } else {
+      play(pickNoRepeat(c.walkAnims, 'anim:crawl') || '螃蟹走路', { loop: true })
+    }
+  }
+  api.on('pet:crawl', onCrawl)
   api.on('pet:reload-config', (payload) => {
     cfg = payload.config || cfg
     if (payload.pools) pool = payload.pools
@@ -854,6 +896,8 @@
     let noteProbe = null
     let speakProbe = null
     let chatProbe = null
+    let evolveProbe = null
+    let crawlProbe = null
     if (boot.selftest) {
       try {
         poke() // 普通戳一下（亲密度台词分支）
@@ -1072,6 +1116,35 @@
           line: bubbleText.textContent,
         }
         hideBubble()
+        // 羁绊进化：强制推一次变身演出，验证形态标题 + 特权 + 金色描边都到位
+        onEvolve({ formLabel: '测试形态', line: '进化啦', perkText: '测试特权', anim: null })
+        evolveProbe = {
+          shown: bubble.classList.contains('show'),
+          line: bubbleText.textContent,
+          badge: bubble.classList.contains('evolve'),
+        }
+        hideBubble()
+        // 桌面巡游：验证 crawling/inverted 样式切换和两种动画确实来自配置池。
+        // play() 会同步把逻辑 active 切到新视频（第 128 行），当场读 vids[active].src
+        onCrawl({ active: true, mode: 'floor', inverted: false })
+        const crawlFloor =
+          document.body.classList.contains('crawling') &&
+          !document.body.classList.contains('inverted')
+        const crawlWalkAnim = nameOf(vids[active].src)
+        onCrawl({ active: true, mode: 'ceiling', inverted: true })
+        const crawlHang = document.body.classList.contains('inverted')
+        const crawlHangAnim = nameOf(vids[active].src)
+        onCrawl({ active: false })
+        crawlProbe = {
+          floor: crawlFloor,
+          hang: crawlHang,
+          off: !document.body.classList.contains('crawling'),
+          walkAnim: crawlWalkAnim,
+          hangAnim: crawlHangAnim,
+          walkInPool: ((cfg.crawler || {}).walkAnims || []).includes(crawlWalkAnim),
+          hangInPool: ((cfg.crawler || {}).hangAnims || []).includes(crawlHangAnim),
+        }
+        manualUntil = 0
         const hr = hit.getBoundingClientRect()
         const hitInfo = {
           stage: getComputedStyle(stage).pointerEvents,
@@ -1115,6 +1188,8 @@
           note: noteProbe,
           speak: speakProbe,
           chat: chatProbe,
+          evolve: evolveProbe,
+          crawl: crawlProbe,
         }
       } catch (e) {
         probe = { error: String((e && e.message) || e) }

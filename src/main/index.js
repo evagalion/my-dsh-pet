@@ -10,6 +10,7 @@ const { ASSETS_DIR, ROOT } = require('./paths')
 const { createWatcher } = require('./watcher')
 const { createTray } = require('./tray')
 const { createFlight, step } = require('../shared/physics')
+const crawl = require('../shared/crawler')
 const { classify, menuGroups } = require('../shared/animations')
 const sfx = require('./sfx')
 const chat = require('./chat')
@@ -22,6 +23,7 @@ const digest = require('./digest')
 const achieve = require('./achieve')
 const lonely = require('./lonely')
 const note = require('./note')
+const evolve = require('./evolve')
 
 const pick = (arr) => (arr && arr.length ? arr[Math.floor(Math.random() * arr.length)] : null)
 
@@ -55,6 +57,9 @@ let pools = null
 let watcher = null
 let flight = null
 let flightTimer = null
+let crawler = null
+let crawlerTimer = null
+let crawlerOn = false
 let tray = null
 let lastKnown = { phase: 'idle', project: '', detail: '', source: 'none', title: '' }
 
@@ -225,6 +230,7 @@ function stopFlight() {
 
 // 点播走路类动画时真的走一段：把窗口在 ms 内平移 dist（会被屏幕边界夹住）
 function startWalk(dist, ms) {
+  if (crawlerOn) stopCrawl() // 手动走一段就接管巡游
   stopFlight()
   if (!win || win.isDestroyed()) return
   const b = win.getBounds()
@@ -255,6 +261,7 @@ function startWalk(dist, ms) {
 }
 
 function startFlight(vx, vy) {
+  if (crawlerOn) stopCrawl() // 抛掷时交还窗口控制权
   const b = win.getBounds()
   flight = createFlight(b.x, b.y, vx, vy)
   const bounds = boundsOf()
@@ -288,6 +295,104 @@ function stopFlightTimerOnly() {
     clearInterval(flightTimer)
     flightTimer = null
   }
+}
+
+// ---- 桌面巡游（免授权基础版）----
+// 鱼自己沿屏幕底边走、定时沿边缘爬到顶部菜单栏倒挂，鼠标靠近会躲。
+// 只用窗口坐标 + 全局鼠标位置，不读别的窗口标题栏，不需要系统授权。
+const clampNum = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
+
+function crawlBounds() {
+  const b = win.getBounds()
+  const disp = screen.getDisplayMatching(b)
+  const full = disp.bounds
+  const wa = disp.workArea
+  return {
+    x: full.x,
+    y: full.y,
+    width: Math.max(0, full.width - b.width),
+    height: Math.max(0, full.height - b.height),
+    // 底边贴工作区下沿（避开 Dock），顶边贴菜单栏
+    floorY: wa.y + wa.height - b.height - 2,
+    ceilY: full.y + 2,
+    w: b.width,
+    h: b.height,
+  }
+}
+
+function stopCrawlTimerOnly() {
+  if (crawlerTimer) {
+    clearInterval(crawlerTimer)
+    crawlerTimer = null
+  }
+}
+
+function stopCrawl() {
+  crawlerOn = false
+  crawler = null
+  stopCrawlTimerOnly()
+  if (cfg.crawler) cfg.crawler.on = false
+  if (win && !win.isDestroyed()) win.webContents.send('pet:crawl', { active: false })
+  saveConfig(cfg)
+}
+
+function startCrawl() {
+  if (!win || win.isDestroyed() || (cfg.crawler && cfg.crawler.enabled === false)) return
+  stopFlight() // 跟抛掷/走路互斥，别两个定时器一起推同一个窗口
+  stopCrawlTimerOnly()
+  const b = win.getBounds()
+  const bounds = crawlBounds()
+  crawlerOn = true
+  cfg.crawler = cfg.crawler || {}
+  cfg.crawler.on = true
+  crawler = crawl.create(
+    clampNum(b.x, bounds.x, bounds.x + bounds.width),
+    bounds.floorY,
+    'floor',
+    Date.now(),
+    b.x < bounds.x + bounds.width / 2 ? 1 : -1
+  )
+
+  let prev = Date.now()
+  crawlerTimer = setInterval(() => {
+    if (!crawlerOn || !crawler || !win || win.isDestroyed()) {
+      stopCrawl()
+      return
+    }
+    const now = Date.now()
+    const dt = clampNum((now - prev) / 1000, 0.001, 0.1)
+    prev = now
+    const wasMode = crawler.mode
+    const wasInverted = crawler.inverted
+    let mouse = null
+    try {
+      mouse = screen.getCursorScreenPoint()
+    } catch (e) {
+      /* 取不到就当鼠标不在附近 */
+    }
+    try {
+      crawl.step(crawler, dt, bounds, mouse, now)
+      win.setPosition(Math.round(crawler.x), Math.round(crawler.y))
+    } catch (e) {
+      stopCrawl()
+      return
+    }
+    if (crawler.mode !== wasMode || crawler.inverted !== wasInverted) {
+      win.webContents.send('pet:crawl', { active: true, mode: crawler.mode, inverted: crawler.inverted })
+    }
+  }, 33)
+
+  win.webContents.send('pet:crawl', { active: true, mode: 'floor', inverted: false })
+  saveConfig(cfg)
+}
+
+function toggleCrawl() {
+  if (crawlerOn) stopCrawl()
+  else startCrawl()
+}
+
+function crawlLabel() {
+  return crawlerOn ? '🐾 停下巡游' : '🐾 桌面巡游'
 }
 
 // 「动作 → 分类 → 具体动画」三级点播，素材全在菜单里，跟参考项目一个路子
@@ -424,6 +529,40 @@ function achieveMenuItems() {
   return [{ label: `成就（${s.done}/${s.total}）`, submenu: sub }]
 }
 
+// 羁绊进化：亲密度到档 → 播变身演出 + 记解锁形态
+function fireEvolve(ev) {
+  if (!ev || !win || win.isDestroyed()) return
+  win.webContents.send('pet:evolve', ev)
+  sfx.speakText(cfg, `${ev.formLabel}！${ev.line}`, true)
+}
+
+function checkEvolve() {
+  const ev = evolve.check(cfg)
+  if (ev) fireEvolve(ev)
+}
+
+// 状态子菜单：当前形态 + 各档解锁情况。点可回看任意已解锁形态的演出
+function evolveMenuItems() {
+  const s = evolve.snapshot(cfg)
+  if (!s.enabled || !s.total) return []
+  const seen = new Set(s.seen)
+  const sub = evolve.levelsOf(cfg).map((lv, i) => {
+    const f = evolve.formOf(cfg, lv.key) || {}
+    const got = seen.has(lv.key)
+    return {
+      label: `${got ? '✓' : '·'} ${i + 1}. ${f.formLabel || lv.label}${got ? '' : `（亲密度 ${lv.at}）`}`,
+      enabled: got,
+      ...(got ? { click: () => fireEvolve(evolve.preview(cfg, lv.key)) } : {}),
+    }
+  })
+  sub.push({ type: 'separator' })
+  sub.push({
+    label: `回看当前形态：${s.formLabel}`,
+    click: () => fireEvolve(evolve.replay(cfg)),
+  })
+  return [{ label: `形态：${s.formLabel}（${s.unlocked}/${s.total}）`, submenu: sub }]
+}
+
 // 每日回顾：点一下念一句今天的战报
 function digestMenuItems() {
   const t = digest.today(cfg)
@@ -547,6 +686,7 @@ async function buildMenuTemplate() {
     label: '状态',
     submenu: compact([
       ...moodMenuItems(),
+      ...evolveMenuItems(),
       feedStatusItem(),
       ...coinsMenuItems(),
       ...digestMenuItems(),
@@ -639,6 +779,7 @@ async function buildMenuTemplate() {
     ...feedMenuItems(),
     actionMenu(),
     { label: '它在干嘛？', click: () => speakNow() },
+    { label: crawlLabel(), click: () => toggleCrawl() },
     { type: 'separator' },
     statusMenu,
     openMenu,
@@ -722,6 +863,7 @@ function reportLine(cfg, cur) {
 }
 
 function resetPosition() {
+  if (crawlerOn) stopCrawl()
   const wa = screen.getDisplayMatching(win.getBounds()).workArea
   win.setPosition(wa.x + wa.width - win.getBounds().width - 48, wa.y + wa.height - win.getBounds().height - 12)
   persistPosition()
@@ -732,6 +874,7 @@ function bumpBond(kind) {
   mood.bumpBond(cfg, kind)
   pushMood()
   checkAchievements() // 亲密度可能刚好到 100
+  checkEvolve() // 亲密度也可能刚好跨到下一个形态
 }
 
 // 心情快照变了才推。亲密度是按时间戳现算的，每秒推一次纯属浪费
@@ -873,6 +1016,17 @@ app.whenReady().then(() => {
 
   createWindow()
 
+  // 羁绊进化：开机静默同步已解锁档，避免每次启动都弹演出。
+  // 但全新安装（seen 为空）时亮一次相，好让这个新功能能被发现。
+  // 自检模式不写存档也不演出，免得污染真实进度和 probe。
+  if (!SELFTEST) {
+    const evolveFresh = evolve.fresh(cfg)
+    evolve.check(cfg, { silent: true })
+    if (evolveFresh) setTimeout(() => fireEvolve(evolve.replay(cfg)), 4500)
+    // 上次开着巡游就接着爬；等渲染层就位再启动，免得第一条 crawl 事件丢掉
+    if (cfg.crawler && cfg.crawler.on) setTimeout(() => { if (!crawlerOn) startCrawl() }, 1500)
+  }
+
   ipcMain.handle('pet:boot', () => {
     const assets = listAssets()
     pools = classify(assets, cfg)
@@ -897,6 +1051,7 @@ app.whenReady().then(() => {
     const dx = Number(rawDx)
     const dy = Number(rawDy)
     if (!Number.isFinite(dx) || !Number.isFinite(dy)) return
+    if (crawlerOn) stopCrawl() // 用户开始拖 = 手动接管，停下巡游
     stopFlight()
     if (!win || win.isDestroyed()) return
     const [x, y] = win.getPosition()
@@ -964,10 +1119,11 @@ app.whenReady().then(() => {
         // 防止以后往顶层堆功能又变回几十项的"臃肿菜单"。
         const topLabels = tpl.items.map((it) => it.label).filter((x) => typeof x === 'string')
         const layoutCheck = {
-          topShort: tpl.items.length <= 15,
+          topShort: tpl.items.length <= 16,
           hasGroups: ['状态', '打开', '设置'].every((g) => topLabels.includes(g)),
           coreOnTop: ['摸一下', '它在干嘛？'].every((g) => topLabels.includes(g)),
           chatOnTop: topLabels.some((x) => x && x.indexOf('聊聊') >= 0),
+          crawlOnTop: topLabels.some((x) => x && x.indexOf('巡游') >= 0),
         }
         // 对话：意图命中 + 离线兜底 + 上下文替换。不依赖网络，纯函数断言。
         const cGreet = chat.matchIntent('你好呀')
@@ -983,6 +1139,77 @@ app.whenReady().then(() => {
           statusFilled: !!cStatus.line && !/\{(agent|phase|what)\}/.test(cStatus.line),
           fallbackOk: !!cUnknown.line && !!cUnknown.anim,
           quickAsks: chat.quickAsks(cfg).length > 0,
+        }
+        // 羁绊进化：5 档形态配置齐全、文案占位符已替换、菜单里有形态入口。
+        // 不依赖存档（自检不写 evolve.json），用 preview 直接造事件。
+        const bondLevels = (cfg.bond || {}).levels || []
+        const evolveForms = (cfg.evolve || {}).forms || {}
+        const evLast = bondLevels.length
+          ? evolve.preview(cfg, bondLevels[bondLevels.length - 1].key)
+          : null
+        const evCheck = {
+          formsOk:
+            bondLevels.length > 0 &&
+            bondLevels.every((lv) => {
+              const f = evolveForms[lv.key]
+              return !!(
+                f &&
+                f.formLabel &&
+                Array.isArray(f.anims) &&
+                f.anims.length &&
+                Array.isArray(f.lines) &&
+                f.lines.length
+              )
+            }),
+          fiveLevels: bondLevels.length === 5,
+          lastFilled:
+            !!evLast && !!evLast.line && !!evLast.anim && !/\{(agent|phase|what)\}/.test(evLast.line),
+          menuShown: labels.some((x) => typeof x === 'string' && x.indexOf('形态：') >= 0),
+          replayOk: !!evolve.replay(cfg),
+        }
+        // 桌面巡游：底边走、边缘转身、爬到顶倒挂、鼠标靠近躲开，四个分支都验一遍。
+        // 纯函数 + 固定输入，不依赖真实屏幕、也不启动定时器。
+        const cBounds = {
+          x: 0,
+          y: 0,
+          width: 1000,
+          height: 700,
+          floorY: 640,
+          ceilY: 2,
+          w: 320,
+          h: 280,
+        }
+        let cs = crawl.create(500, 640, 'floor', 0, 1)
+        cs.modeUntil = 999999
+        crawl.step(cs, 0.1, cBounds, null, 100)
+        const cWalk = cs.x > 500 && Math.abs(cs.y - 640) < 1
+        cs.x = 1000
+        cs.dir = 1
+        cs.pauseUntil = 0
+        crawl.step(cs, 0.1, cBounds, null, 200)
+        const cTurn = cs.dir === -1 && cs.x <= 1000
+        cs = crawl.create(500, 640, 'floor', 0, 1)
+        cs.mode = 'climb'
+        cs.edge = 'left'
+        cs.targetY = 2
+        cs.pauseUntil = 0
+        for (let i = 0; i < 45; i++) crawl.step(cs, 0.1, cBounds, null, 300 + i * 200)
+        const cClimb = cs.mode === 'ceiling' && cs.inverted === true && cs.y === 2
+        cs = crawl.create(500, 640, 'floor', 0, 1)
+        cs.modeUntil = 999999
+        const cCenter = crawl.center(cs, cBounds)
+        crawl.step(cs, 0.016, cBounds, { x: cCenter.x + 20, y: cCenter.y }, 100)
+        const cDodge = cs.dir === -1
+        const crawlCheck = {
+          walk: cWalk,
+          turn: cTurn,
+          climb: cClimb,
+          dodge: cDodge,
+          animsOk: !!(
+            cfg.crawler &&
+            (cfg.crawler.walkAnims || []).length &&
+            (cfg.crawler.hangAnims || []).length
+          ),
         }
         finish({
           menuBuilt: true,
@@ -1002,6 +1229,10 @@ app.whenReady().then(() => {
           chat: { greet: cGreet && cGreet.id, status: cStatus.line, fallback: cUnknown.line },
           chatAllOk: Object.values(chatCheck).every(Boolean),
           chatCheck,
+          evolveAllOk: Object.values(evCheck).every(Boolean),
+          evolveCheck: evCheck,
+          crawlAllOk: Object.values(crawlCheck).every(Boolean),
+          crawlCheck,
         })
       })
       .catch((e) => finish({ menuBuilt: false, menuError: String((e && e.message) || e).slice(0, 400) }))
@@ -1061,6 +1292,8 @@ app.whenReady().then(() => {
     chat: () => openChatWindow(),
     poke: () => win && win.webContents.send('pet:poke'),
     speak: () => win && speakNow(),
+    crawlLabel,
+    toggleCrawl,
     reset: () => win && resetPosition(),
     openWorkBuddy: () => execFile('open', ['-a', 'WorkBuddy'], () => {}),
     openCursor: () => execFile('open', ['-a', 'Cursor'], () => {}),

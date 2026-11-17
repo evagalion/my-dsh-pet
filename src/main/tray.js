@@ -24,6 +24,13 @@ function createTray(actions) {
       { label: '💬 跟它聊聊', click: actions.chat },
       { label: '摸一下', click: actions.poke },
       { label: '它在干嘛？', click: actions.speak },
+      {
+        label: actions.crawlLabel(),
+        click: () => {
+          actions.toggleCrawl()
+          tray.rebuild() // 菜单上的「开始/停下」文案要跟着变
+        },
+      },
       { type: 'separator' },
       { label: actions.clickThroughLabel(), click: () => actions.toggleClickThrough() },
       { label: '回到屏幕右下角', click: actions.reset },

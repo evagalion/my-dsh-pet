@@ -42,6 +42,13 @@ body.through #stage {
   transition: opacity 0.25s ease;
 }
 
+/* 桌面巡游：爬到顶部菜单栏时整只鱼翻过来倒挂。
+   气泡在巡游中是隐藏的，不会跟着倒；命中区在 stage 里，会跟着鱼一起翻。 */
+body.inverted #stage {
+  transform: rotate(180deg);
+  transition: transform 0.45s ease;
+}
+
 /* 气泡和食物标签只是显示，别抢鼠标 */
 #bubble,
 #food {
@@ -153,6 +160,15 @@ body.through #stage {
   font-weight: 700;
   letter-spacing: 1px;
   color: #b09b3e;
+}
+
+/* 羁绊进化：金色描边 + 柔光，跟普通汇报/便签一眼区分开 */
+.bubble.evolve {
+  background: linear-gradient(135deg, #fffdf3 0%, #ffefc4 100%);
+  border: 1px solid #e0b952;
+  color: #6b4a12;
+  box-shadow: 0 0 0 3px rgba(240, 195, 80, 0.22), 0 4px 16px rgba(180, 130, 20, 0.28);
+  font-weight: 600;
 }
 
 .bubble .head {
