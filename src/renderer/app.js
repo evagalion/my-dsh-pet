@@ -813,19 +813,28 @@
     if (d.active === false) {
       crawlMode = null
       manualUntil = 0
+      hideBubble() // 收掉巡游台词，别停在半空
       return
     }
-    crawlMode = d.mode || 'floor'
+    const nextMode = d.mode || 'floor'
+    const changed = nextMode !== crawlMode
+    crawlMode = nextMode
     manualUntil = Date.now() + 60000
     phase = 'idle'
     clearTimeout(phaseTimer)
     clearRotate()
-    hideBubble() // 倒挂时气泡会跟着翻，干脆不显示
     const c = cfg.crawler || {}
     if (d.inverted) {
       play(pickNoRepeat(c.hangAnims, 'anim:crawl-hang') || '待机呼吸休闲', { loop: true })
     } else {
       play(pickNoRepeat(c.walkAnims, 'anim:crawl') || '螃蟹走路', { loop: true })
+    }
+    // 巡游时给一句姿态台词，让人一眼看出它在干嘛（之前把气泡藏了，等于闷头滑行）。
+    // 气泡是 body 的直接子元素、不在 #stage 里，倒挂时文字不会跟着翻。
+    // 只在姿态切换时换一句，别每帧刷；ms=0 常驻，直到切姿态或停巡游。
+    if (changed) {
+      const pool = ((c.lines || {})[nextMode]) || []
+      showBubble(pickNoRepeat(pool, 'crawl:' + nextMode) || '我自己溜达会儿~', null, 0)
     }
   }
   api.on('pet:crawl', onCrawl)
@@ -1126,14 +1135,18 @@
         hideBubble()
         // 桌面巡游：验证 crawling/inverted 样式切换和两种动画确实来自配置池。
         // play() 会同步把逻辑 active 切到新视频（第 128 行），当场读 vids[active].src
+        crawlMode = null // 确保第一次算「姿态切换」，会推一句台词
         onCrawl({ active: true, mode: 'floor', inverted: false })
         const crawlFloor =
           document.body.classList.contains('crawling') &&
           !document.body.classList.contains('inverted')
         const crawlWalkAnim = nameOf(vids[active].src)
+        const floorLine = bubbleText.textContent
+        const floorLineShown = bubble.classList.contains('show') && !!floorLine
         onCrawl({ active: true, mode: 'ceiling', inverted: true })
         const crawlHang = document.body.classList.contains('inverted')
         const crawlHangAnim = nameOf(vids[active].src)
+        const ceilingLine = bubbleText.textContent
         onCrawl({ active: false })
         crawlProbe = {
           floor: crawlFloor,
@@ -1143,6 +1156,10 @@
           hangAnim: crawlHangAnim,
           walkInPool: ((cfg.crawler || {}).walkAnims || []).includes(crawlWalkAnim),
           hangInPool: ((cfg.crawler || {}).hangAnims || []).includes(crawlHangAnim),
+          // 姿态台词：底边有字、换姿态会换一句、停下后气泡收掉
+          lineShown: floorLineShown,
+          lineChanged: !!ceilingLine && ceilingLine !== floorLine,
+          lineCleared: !bubble.classList.contains('show'),
         }
         manualUntil = 0
         const hr = hit.getBoundingClientRect()

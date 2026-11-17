@@ -12,12 +12,17 @@
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
 const rand = (a, b) => a + Math.random() * (b - a)
 
-const SPEED = 95 // 水平巡游速度 px/s
-const CLIMB_SPEED = 170 // 沿边缘爬升速度 px/s
-const DODGE_SPEED = 280 // 躲鼠标时的速度 px/s
-const DODGE_RADIUS = 140 // 鼠标进入这个半径（按窗口中心算）就躲
-const DODGE_MS = 850 // 一次躲避持续多久
-const EDGE_PAUSE_MS = 650 // 到屏幕边缘停一下再转身
+// 关键：用「固定步长」而不是「速度 × dt」。
+// dt 会随定时器抖动（视频解码/GC 卡一下 dt 就变大），乘出来那一帧鱼突然蹦十几像素，
+// 下一帧又只走两三像素 —— 肉眼看到的就是「平移掉帧/一顿一顿」。
+// 固定步长让每帧位移恒定，帧率再抖也只是走得慢一点，绝不会跳步。
+const STEP = 2 // 水平巡游：每 tick 位移 px
+const CLIMB_STEP = 4 // 沿边缘爬：每 tick 位移 px
+const DODGE_STEP = 5 // 躲鼠标：每 tick 位移 px
+const Y_EASE = 0.25 // 高度向目标靠拢的比例（平滑贴底/贴顶）
+const DODGE_RADIUS = 150 // 鼠标进入这个半径（按窗口中心算）就躲
+const DODGE_MS = 900 // 一次躲避持续多久
+const EDGE_PAUSE_MS = 550 // 到屏幕边缘停一下再转身
 
 // mode: floor（底边走）| ceiling（顶部倒挂走）| climb（沿边缘爬）
 function create(x, y, mode, now, dir) {
@@ -41,11 +46,11 @@ function center(s, b) {
   return { x: s.x + ((b && b.w) || 160) / 2, y: s.y + ((b && b.h) || 140) / 2 }
 }
 
-// 推进一帧。bounds: { x, y, width, height, floorY, ceilY, w, h }
+// 推进一帧。dt 只为兼容旧调用签名保留，位移一律用固定步长。
+// bounds: { x, y, width, height, floorY, ceilY, w, h }
 // mouse: screen.getCursorScreenPoint() 的 {x, y}，可为 null。
 function step(s, dt, bounds, mouse, now) {
   if (!s || !bounds) return s
-  dt = clamp(Number(dt) || 0, 0, 0.1)
   if (s.pauseUntil > now) return s
 
   // 鼠标靠近：朝远离它的方向转身，并进入一小段加速
@@ -58,12 +63,12 @@ function step(s, dt, bounds, mouse, now) {
       s.dodgeUntil = now + DODGE_MS
     }
   }
-  const speed = s.dodgeUntil > now ? DODGE_SPEED : SPEED
+  const stepX = s.dodgeUntil > now ? DODGE_STEP : STEP
 
   if (s.mode === 'climb') {
     s.x = s.edge === 'left' ? bounds.x : bounds.x + bounds.width
     const dy = s.targetY - s.y
-    const move = Math.sign(dy) * CLIMB_SPEED * dt
+    const move = Math.sign(dy) * CLIMB_STEP
     s.y = Math.abs(move) >= Math.abs(dy) ? s.targetY : s.y + move
     s.y = clamp(s.y, bounds.y, bounds.y + bounds.height)
     // 爬到位 → 切换成顶/底巡游，倒挂标记随模式走
@@ -77,10 +82,10 @@ function step(s, dt, bounds, mouse, now) {
     return s
   }
 
-  // 水平巡游：平滑靠拢当前模式的高度（底边 / 顶部），再左右走
+  // 水平巡游：平滑靠拢当前模式的高度（底边 / 顶部），再按固定步长左右走
   const goalY = s.mode === 'floor' ? bounds.floorY : bounds.ceilY
-  s.y += (goalY - s.y) * Math.min(1, dt * 8)
-  s.x += s.dir * speed * dt
+  s.y += (goalY - s.y) * Y_EASE
+  s.x += s.dir * stepX
 
   const minX = bounds.x
   const maxX = bounds.x + bounds.width
@@ -105,4 +110,4 @@ function step(s, dt, bounds, mouse, now) {
   return s
 }
 
-module.exports = { create, step, center, SPEED, DODGE_RADIUS }
+module.exports = { create, step, center, STEP, DODGE_RADIUS }

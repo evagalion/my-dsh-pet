@@ -353,26 +353,38 @@ function startCrawl() {
     b.x < bounds.x + bounds.width / 2 ? 1 : -1
   )
 
-  let prev = Date.now()
+  let mouse = null
+  let tick = 0
+  let lastX = NaN
+  let lastY = NaN
   crawlerTimer = setInterval(() => {
     if (!crawlerOn || !crawler || !win || win.isDestroyed()) {
       stopCrawl()
       return
     }
     const now = Date.now()
-    const dt = clampNum((now - prev) / 1000, 0.001, 0.1)
-    prev = now
     const wasMode = crawler.mode
     const wasInverted = crawler.inverted
-    let mouse = null
-    try {
-      mouse = screen.getCursorScreenPoint()
-    } catch (e) {
-      /* 取不到就当鼠标不在附近 */
+    // 鼠标位置不必每帧都问系统（getCursorScreenPoint 是同步跨进程调用），
+    // 每 4 帧（约 130ms）取一次足够——150px 的躲避半径不会因为你手速快而漏掉。
+    if (tick++ % 4 === 0) {
+      try {
+        mouse = screen.getCursorScreenPoint()
+      } catch (e) {
+        mouse = null
+      }
     }
     try {
-      crawl.step(crawler, dt, bounds, mouse, now)
-      win.setPosition(Math.round(crawler.x), Math.round(crawler.y))
+      crawl.step(crawler, 0, bounds, mouse, now)
+      const x = Math.round(crawler.x)
+      const y = Math.round(crawler.y)
+      // 坐标没变就别调 setPosition：macOS 每次调用都会触发窗口重绘合成，
+      // 停顿/贴边时坐标不变，跳过能明显减少无谓的合成、让动画更顺。
+      if (x !== lastX || y !== lastY) {
+        win.setPosition(x, y)
+        lastX = x
+        lastY = y
+      }
     } catch (e) {
       stopCrawl()
       return
@@ -1193,12 +1205,13 @@ app.whenReady().then(() => {
         cs.edge = 'left'
         cs.targetY = 2
         cs.pauseUntil = 0
-        for (let i = 0; i < 45; i++) crawl.step(cs, 0.1, cBounds, null, 300 + i * 200)
+        // 固定步长 CLIMB_STEP=4，从 y=640 到 2 要 ~160 tick，给 200 次余量
+        for (let i = 0; i < 200; i++) crawl.step(cs, 0, cBounds, null, 300 + i * 20)
         const cClimb = cs.mode === 'ceiling' && cs.inverted === true && cs.y === 2
         cs = crawl.create(500, 640, 'floor', 0, 1)
         cs.modeUntil = 999999
         const cCenter = crawl.center(cs, cBounds)
-        crawl.step(cs, 0.016, cBounds, { x: cCenter.x + 20, y: cCenter.y }, 100)
+        crawl.step(cs, 0, cBounds, { x: cCenter.x + 20, y: cCenter.y }, 100)
         const cDodge = cs.dir === -1
         const crawlCheck = {
           walk: cWalk,
@@ -1209,6 +1222,13 @@ app.whenReady().then(() => {
             cfg.crawler &&
             (cfg.crawler.walkAnims || []).length &&
             (cfg.crawler.hangAnims || []).length
+          ),
+          // 三种姿态的台词都要配齐，用户才知道它在干嘛
+          linesOk: !!(
+            cfg.crawler &&
+            ['floor', 'climb', 'ceiling'].every(
+              (k) => (cfg.crawler.lines || {})[k] && (cfg.crawler.lines[k] || []).length
+            )
           ),
         }
         finish({

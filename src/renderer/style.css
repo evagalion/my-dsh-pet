@@ -43,10 +43,26 @@ body.through #stage {
 }
 
 /* 桌面巡游：爬到顶部菜单栏时整只鱼翻过来倒挂。
-   气泡在巡游中是隐藏的，不会跟着倒；命中区在 stage 里，会跟着鱼一起翻。 */
+   气泡是 body 的直接子元素、不在 stage 里，所以文字不会跟着倒。 */
 body.inverted #stage {
   transform: rotate(180deg);
   transition: transform 0.45s ease;
+}
+
+/* 巡游时给鱼身一点轻微的上下颠簸，让「横向平移」看着像在迈步，而不是一块贴纸在滑。
+   作用在两个 video 上（.pet 本身带 translateX(-50%)，这里叠加 translateY）。
+   倒挂时不颠（inverted 时 stage 已经翻了，再颠观感奇怪），爬升/停留也照常轻微起伏。 */
+body.crawling:not(.inverted) .pet.show {
+  animation: crawl-bob 380ms ease-in-out infinite;
+}
+@keyframes crawl-bob {
+  0%,
+  100% {
+    transform: translateX(-50%) translateY(0);
+  }
+  50% {
+    transform: translateX(-50%) translateY(-3px);
+  }
 }
 
 /* 气泡和食物标签只是显示，别抢鼠标 */
