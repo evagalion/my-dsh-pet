@@ -803,38 +803,41 @@
     showBubble(`${d.formLabel || '新形态'}！${d.line || ''}${perk}`, { evolve: true }, 8000)
   }
   api.on('pet:evolve', onEvolve)
-  // 桌面巡游：主进程只在「开始 / 停下 / 换模式」时推，不会每帧打扰渲染层。
-  // 巡游期间长时间屏蔽状态机，别走两步就被「工作中」抢回去；用户一拖鱼就收到 active:false。
-  let crawlMode = null
+  // 桌面巡游：主进程在「开始/停下/换行为」时推，不会每帧打扰渲染层。
+  // 每条消息带 place（floor/ceiling/climb）+ activity（walk/run/look/stretch/shy/greet/flee），
+  // 渲染层据此播不同的动画和台词——走走停停、张望伸懒腰、被你发现会害羞打招呼。
+  let crawlKey = ''
   function onCrawl(d) {
     if (!d) return
     document.body.classList.toggle('crawling', d.active !== false)
     document.body.classList.toggle('inverted', !!d.inverted)
     if (d.active === false) {
-      crawlMode = null
+      crawlKey = ''
       manualUntil = 0
       hideBubble() // 收掉巡游台词，别停在半空
       return
     }
-    const nextMode = d.mode || 'floor'
-    const changed = nextMode !== crawlMode
-    crawlMode = nextMode
+    const place = d.place || 'floor'
+    const activity = d.activity || 'walk'
+    // 倒挂时用 ceiling 那套动画台词，否则用当前行为那套
+    const key = d.inverted ? 'ceiling' : activity
+    const nextKey = place + ':' + key
+    const changed = nextKey !== crawlKey
+    crawlKey = nextKey
     manualUntil = Date.now() + 60000
     phase = 'idle'
     clearTimeout(phaseTimer)
     clearRotate()
     const c = cfg.crawler || {}
-    if (d.inverted) {
-      play(pickNoRepeat(c.hangAnims, 'anim:crawl-hang') || '待机呼吸休闲', { loop: true })
-    } else {
-      play(pickNoRepeat(c.walkAnims, 'anim:crawl') || '螃蟹走路', { loop: true })
-    }
-    // 巡游时给一句姿态台词，让人一眼看出它在干嘛（之前把气泡藏了，等于闷头滑行）。
-    // 气泡是 body 的直接子元素、不在 #stage 里，倒挂时文字不会跟着翻。
-    // 只在姿态切换时换一句，别每帧刷；ms=0 常驻，直到切姿态或停巡游。
+    const one = ((c.activities || {})[key]) || {}
+    const anim = pickNoRepeat(one.anims, 'anim:crawl-' + key)
+    // 一律 loop：短反应到期后主进程会推 walk 覆盖，不会停在末帧；
+    // loop 也避免 unknown 动画卡住播放链（巡游期间没有 onEnd 兜底链）。
+    play(anim || '螃蟹走路', { loop: true })
     if (changed) {
-      const pool = ((c.lines || {})[nextMode]) || []
-      showBubble(pickNoRepeat(pool, 'crawl:' + nextMode) || '我自己溜达会儿~', null, 0)
+      const line = pickNoRepeat(one.lines, 'line:crawl-' + key) || '我自己溜达会儿~'
+      // 气泡常驻到下次行为切换，行为一换就换台词
+      showBubble(line, null, 0)
     }
   }
   api.on('pet:crawl', onCrawl)
@@ -1133,32 +1136,43 @@
           badge: bubble.classList.contains('evolve'),
         }
         hideBubble()
-        // 桌面巡游：验证 crawling/inverted 样式切换和两种动画确实来自配置池。
+        // 桌面巡游：验证不同行为会播各自动画+台词、倒挂样式、停下收气泡。
         // play() 会同步把逻辑 active 切到新视频（第 128 行），当场读 vids[active].src
-        crawlMode = null // 确保第一次算「姿态切换」，会推一句台词
-        onCrawl({ active: true, mode: 'floor', inverted: false })
+        const acts = ((cfg.crawler || {}).activities) || {}
+        crawlKey = '' // 确保第一次算「行为切换」，会推一句台词
+        onCrawl({ active: true, place: 'floor', activity: 'walk', inverted: false })
         const crawlFloor =
           document.body.classList.contains('crawling') &&
           !document.body.classList.contains('inverted')
-        const crawlWalkAnim = nameOf(vids[active].src)
-        const floorLine = bubbleText.textContent
-        const floorLineShown = bubble.classList.contains('show') && !!floorLine
-        onCrawl({ active: true, mode: 'ceiling', inverted: true })
+        const walkAnim = nameOf(vids[active].src)
+        const walkLine = bubbleText.textContent
+        const lineShown = bubble.classList.contains('show') && !!walkLine
+        // 换成小跑：动画和台词都应来自 run 池，且与 walk 不同
+        onCrawl({ active: true, place: 'floor', activity: 'run', inverted: false })
+        const runAnim = nameOf(vids[active].src)
+        const runLine = bubbleText.textContent
+        // 害羞互动
+        onCrawl({ active: true, place: 'floor', activity: 'shy', inverted: false })
+        const shyAnim = nameOf(vids[active].src)
+        const shyLine = bubbleText.textContent
+        // 倒挂
+        onCrawl({ active: true, place: 'ceiling', activity: 'walk', inverted: true })
         const crawlHang = document.body.classList.contains('inverted')
-        const crawlHangAnim = nameOf(vids[active].src)
-        const ceilingLine = bubbleText.textContent
+        const hangAnim = nameOf(vids[active].src)
         onCrawl({ active: false })
         crawlProbe = {
           floor: crawlFloor,
           hang: crawlHang,
           off: !document.body.classList.contains('crawling'),
-          walkAnim: crawlWalkAnim,
-          hangAnim: crawlHangAnim,
-          walkInPool: ((cfg.crawler || {}).walkAnims || []).includes(crawlWalkAnim),
-          hangInPool: ((cfg.crawler || {}).hangAnims || []).includes(crawlHangAnim),
-          // 姿态台词：底边有字、换姿态会换一句、停下后气泡收掉
-          lineShown: floorLineShown,
-          lineChanged: !!ceilingLine && ceilingLine !== floorLine,
+          lineShown,
+          // 每种行为的动画确实来自各自配置池
+          animPoolsOk:
+            ((acts.walk || {}).anims || []).includes(walkAnim) &&
+            ((acts.run || {}).anims || []).includes(runAnim) &&
+            ((acts.shy || {}).anims || []).includes(shyAnim) &&
+            ((acts.ceiling || {}).anims || []).includes(hangAnim),
+          // 换行为会换台词（不是一句话到底）
+          lineChanged: !!runLine && runLine !== walkLine && !!shyLine && shyLine !== walkLine,
           lineCleared: !bubble.classList.contains('show'),
         }
         manualUntil = 0

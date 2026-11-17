@@ -363,10 +363,8 @@ function startCrawl() {
       return
     }
     const now = Date.now()
-    const wasMode = crawler.mode
-    const wasInverted = crawler.inverted
     // 鼠标位置不必每帧都问系统（getCursorScreenPoint 是同步跨进程调用），
-    // 每 4 帧（约 130ms）取一次足够——150px 的躲避半径不会因为你手速快而漏掉。
+    // 每 4 帧（约 130ms）取一次足够——170px 的互动半径不会因为你手速快而漏掉。
     if (tick++ % 4 === 0) {
       try {
         mouse = screen.getCursorScreenPoint()
@@ -374,8 +372,10 @@ function startCrawl() {
         mouse = null
       }
     }
+    let changed = false
     try {
-      crawl.step(crawler, 0, bounds, mouse, now)
+      const r = crawl.step(crawler, 0, bounds, mouse, now)
+      changed = !!r.changed
       const x = Math.round(crawler.x)
       const y = Math.round(crawler.y)
       // 坐标没变就别调 setPosition：macOS 每次调用都会触发窗口重绘合成，
@@ -389,12 +389,23 @@ function startCrawl() {
       stopCrawl()
       return
     }
-    if (crawler.mode !== wasMode || crawler.inverted !== wasInverted) {
-      win.webContents.send('pet:crawl', { active: true, mode: crawler.mode, inverted: crawler.inverted })
+    // 行为/位置一变就推给渲染层换动画+台词（不再是只在换模式时推）
+    if (changed) {
+      win.webContents.send('pet:crawl', {
+        active: true,
+        place: crawler.place,
+        activity: crawler.activity,
+        inverted: crawler.inverted,
+      })
     }
   }, 33)
 
-  win.webContents.send('pet:crawl', { active: true, mode: 'floor', inverted: false })
+  win.webContents.send('pet:crawl', {
+    active: true,
+    place: 'floor',
+    activity: 'walk',
+    inverted: false,
+  })
   saveConfig(cfg)
 }
 
@@ -1179,8 +1190,8 @@ app.whenReady().then(() => {
           menuShown: labels.some((x) => typeof x === 'string' && x.indexOf('形态：') >= 0),
           replayOk: !!evolve.replay(cfg),
         }
-        // 桌面巡游：底边走、边缘转身、爬到顶倒挂、鼠标靠近躲开，四个分支都验一遍。
-        // 纯函数 + 固定输入，不依赖真实屏幕、也不启动定时器。
+        // 桌面巡游行为状态机：漫步加减速、边缘转身、爬到顶倒挂、鼠标多种互动、
+        // 行为到期主动切换、驻足速度为 0——全用纯函数 + 固定输入验，不启动定时器。
         const cBounds = {
           x: 0,
           y: 0,
@@ -1191,45 +1202,67 @@ app.whenReady().then(() => {
           w: 320,
           h: 280,
         }
+        // 漫步：vx 从 0 缓动加速，鱼往前走；驻足行为 vx 应为 0
         let cs = crawl.create(500, 640, 'floor', 0, 1)
-        cs.modeUntil = 999999
-        crawl.step(cs, 0.1, cBounds, null, 100)
-        const cWalk = cs.x > 500 && Math.abs(cs.y - 640) < 1
+        cs.behaviorUntil = 999999
+        cs.placeUntil = 999999
+        for (let i = 0; i < 10; i++) crawl.step(cs, 0, cBounds, null, 100 + i * 33)
+        const cWalk = cs.x > 500 && cs.vx > 0 && cs.activity === 'walk'
+        cs.activity = 'look'
+        cs.vx = 1.5
+        crawl.step(cs, 0, cBounds, null, 500)
+        const cPauseVx = cs.vx < 1.5 // 驻足时速度在往 0 衰减
+        // 边缘转身
+        cs = crawl.create(500, 640, 'floor', 0, 1)
+        cs.behaviorUntil = 999999
+        cs.placeUntil = 999999
         cs.x = 1000
         cs.dir = 1
         cs.pauseUntil = 0
-        crawl.step(cs, 0.1, cBounds, null, 200)
+        crawl.step(cs, 0, cBounds, null, 200)
         const cTurn = cs.dir === -1 && cs.x <= 1000
+        // 爬到顶倒挂：climb 每 tick SPEED.climb=2.6，给 320 次余量
         cs = crawl.create(500, 640, 'floor', 0, 1)
-        cs.mode = 'climb'
+        cs.place = 'climb'
         cs.edge = 'left'
         cs.targetY = 2
+        cs.climbDeadline = 999999
         cs.pauseUntil = 0
-        // 固定步长 CLIMB_STEP=4，从 y=640 到 2 要 ~160 tick，给 200 次余量
-        for (let i = 0; i < 200; i++) crawl.step(cs, 0, cBounds, null, 300 + i * 20)
-        const cClimb = cs.mode === 'ceiling' && cs.inverted === true && cs.y === 2
+        for (let i = 0; i < 320; i++) crawl.step(cs, 0, cBounds, null, 300 + i * 20)
+        const cClimb = cs.place === 'ceiling' && cs.inverted === true && cs.y === 2
+        // 鼠标靠近触发俏皮互动，且三种反应都合法
         cs = crawl.create(500, 640, 'floor', 0, 1)
-        cs.modeUntil = 999999
+        cs.behaviorUntil = 999999
+        cs.placeUntil = 999999
         const cCenter = crawl.center(cs, cBounds)
-        crawl.step(cs, 0, cBounds, { x: cCenter.x + 20, y: cCenter.y }, 100)
-        const cDodge = cs.dir === -1
+        const reactKinds = new Set()
+        for (let i = 0; i < 30; i++) {
+          const t = crawl.create(500, 640, 'floor', 0, 1)
+          t.behaviorUntil = 999999
+          t.placeUntil = 999999
+          crawl.step(t, 0, cBounds, { x: cCenter.x + 20, y: cCenter.y }, 100)
+          reactKinds.add(t.activity)
+        }
+        const cReact = ['shy', 'greet', 'flee'].every((k) => reactKinds.has(k))
+        // 短反应到期会回漫步
+        cs = crawl.create(500, 640, 'floor', 0, 1)
+        crawl.react(cs, 'shy', 100)
+        crawl.step(cs, 0, cBounds, null, 100 + crawl.REACT_COOLDOWN + 500)
+        const cRecover = cs.activity === 'walk'
+        // 每种行为的动画 + 台词都要配齐，用户才看得出「在干嘛」
+        const actKeys = ['walk', 'run', 'look', 'stretch', 'shy', 'greet', 'flee', 'climb', 'ceiling']
+        const acts = ((cfg.crawler || {}).activities) || {}
+        const actsOk = actKeys.every(
+          (k) => acts[k] && (acts[k].anims || []).length && (acts[k].lines || []).length
+        )
         const crawlCheck = {
           walk: cWalk,
+          pauseVx: cPauseVx,
           turn: cTurn,
           climb: cClimb,
-          dodge: cDodge,
-          animsOk: !!(
-            cfg.crawler &&
-            (cfg.crawler.walkAnims || []).length &&
-            (cfg.crawler.hangAnims || []).length
-          ),
-          // 三种姿态的台词都要配齐，用户才知道它在干嘛
-          linesOk: !!(
-            cfg.crawler &&
-            ['floor', 'climb', 'ceiling'].every(
-              (k) => (cfg.crawler.lines || {})[k] && (cfg.crawler.lines[k] || []).length
-            )
-          ),
+          react: cReact,
+          recover: cRecover,
+          actsOk,
         }
         finish({
           menuBuilt: true,
@@ -1265,7 +1298,21 @@ app.whenReady().then(() => {
   })
   ipcMain.on('pet:drag-end', () => persistPosition())
   // 点一下鱼身：播随机点击音效。渲染层已经判过「没拖动」了，这里只管出声
-  ipcMain.on('pet:click', () => sfx.click(cfg))
+  ipcMain.on('pet:click', () => {
+    sfx.click(cfg)
+    // 巡游中戳它 → 触发一次俏皮反应（害羞/打招呼），不只是普通点击音效。
+    // 复用行为状态机的 react()，必定能推动画和台词；冷却由 reactUntil 管。
+    if (crawlerOn && crawler && win && !win.isDestroyed()) {
+      const kind = Math.random() < 0.5 ? 'shy' : 'greet'
+      crawl.react(crawler, kind, Date.now())
+      win.webContents.send('pet:crawl', {
+        active: true,
+        place: crawler.place,
+        activity: crawler.activity,
+        inverted: crawler.inverted,
+      })
+    }
+  })
   // 戳它 / 喂它都涨亲密度。渲染层戳的时候顺手报一下
   ipcMain.on('pet:bond', (_e, kind) => bumpBond(kind === 'feed' ? 'feed' : 'poke'))
   ipcMain.on('pet:menu', () => {
