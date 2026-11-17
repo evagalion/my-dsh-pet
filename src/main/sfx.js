@@ -21,6 +21,28 @@ const { ASSETS_DIR, ROOT } = require('./paths')
 const IS_MAC = os.platform() === 'darwin'
 const SAY = '/usr/bin/say'
 
+// 关键：afplay 是外部系统进程，读不了 asar 虚拟包里的文件（会报 AudioFileOpen failed）。
+// 打包后 assets 在 app.asar 内，fs 能读但 afplay 不能。所以播放前先把文件复制到真实
+// 临时目录，用内容 hash 命名（同名同内容只复制一次，重启后复用）。开发态不在 asar 内
+// 则直接用原路径。
+const SFX_CACHE = path.join(os.tmpdir(), 'dafeiyu-sfx')
+function realAudioPath(file) {
+  if (file.indexOf('app.asar' + path.sep) < 0 && file.indexOf('app.asar/') < 0) return file
+  try {
+    const buf = fs.readFileSync(file)
+    const key = crypto.createHash('md5').update(buf).digest('hex').slice(0, 16)
+    const ext = path.extname(file)
+    const out = path.join(SFX_CACHE, key + ext)
+    if (!fs.existsSync(out)) {
+      fs.mkdirSync(SFX_CACHE, { recursive: true })
+      fs.writeFileSync(out, buf)
+    }
+    return out
+  } catch (e) {
+    return file // 复制失败就维持原样，至少不崩
+  }
+}
+
 // 「开始干活」只在真正从闲下来切过去时响，从"在想/在收尾"转过来不算新一轮，免得一直说话
 const FRESH_START = new Set(['idle', 'success', 'error', 'waiting'])
 
@@ -348,7 +370,7 @@ function tone(cfg, source, event, force) {
   lastAt = Date.now()
 
   const vol = String((cfg.sound && cfg.sound.volume) == null ? 0.35 : cfg.sound.volume)
-  execFile('afplay', ['-v', vol, file], { timeout: 5000 }, () => {})
+  execFile('afplay', ['-v', vol, realAudioPath(file)], { timeout: 5000 }, () => {})
   return true
 }
 
@@ -397,7 +419,7 @@ function click(cfg, force) {
   lastClickFile = f
 
   const vol = String(c.volume == null ? 0.5 : c.volume)
-  execFile('afplay', ['-v', vol, path.join(clickDir(), f)], { timeout: 8000 }, () => {})
+  execFile('afplay', ['-v', vol, realAudioPath(path.join(clickDir(), f))], { timeout: 8000 }, () => {})
   return true
 }
 

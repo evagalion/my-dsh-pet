@@ -26,6 +26,11 @@ function loadConfig() {
     if (raw.sound && (raw.sound.mode === 'voice' || raw.sound.mode === 'tone')) {
       cfg.sound.mode = raw.sound.mode
     }
+    // 点击音效开关（之前漏存漏读，菜单切了重启就丢）
+    if (raw.sound && raw.sound.click && typeof raw.sound.click.enabled === 'boolean') {
+      cfg.sound.click = cfg.sound.click || {}
+      cfg.sound.click.enabled = raw.sound.click.enabled
+    }
     if (raw.crawler && typeof raw.crawler.on === 'boolean') cfg.crawler.on = raw.crawler.on
   } catch {
     /* 第一次跑，用默认值 */
@@ -42,6 +47,7 @@ function saveConfig(cfg) {
       sound: {
         enabled: !!(cfg.sound && cfg.sound.enabled !== false),
         mode: (cfg.sound && cfg.sound.mode) === 'tone' ? 'tone' : 'voice',
+        click: { enabled: !!(cfg.sound && cfg.sound.click && cfg.sound.click.enabled !== false) },
       },
       crawler: { on: !!(cfg.crawler && cfg.crawler.on) },
     }
