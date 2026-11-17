@@ -804,26 +804,21 @@
   }
   api.on('pet:evolve', onEvolve)
   // 桌面巡游：主进程在「开始/停下/换行为」时推，不会每帧打扰渲染层。
-  // 每条消息带 place（floor/ceiling/climb）+ activity（walk/run/look/stretch/shy/greet/flee），
-  // 渲染层据此播不同的动画和台词——走走停停、张望伸懒腰、被你发现会害羞打招呼。
+  // 消息只带 activity（walk/run/look/stretch/shy/greet/flee），渲染层据此播不同动画和台词。
+  // 鱼始终在屏幕底边，没有倒挂/翻转（用户明确不要）。
   let crawlKey = ''
   function onCrawl(d) {
     if (!d) return
     document.body.classList.toggle('crawling', d.active !== false)
-    document.body.classList.toggle('inverted', !!d.inverted)
     if (d.active === false) {
       crawlKey = ''
       manualUntil = 0
       hideBubble() // 收掉巡游台词，别停在半空
       return
     }
-    const place = d.place || 'floor'
-    const activity = d.activity || 'walk'
-    // 倒挂时用 ceiling 那套动画台词，否则用当前行为那套
-    const key = d.inverted ? 'ceiling' : activity
-    const nextKey = place + ':' + key
-    const changed = nextKey !== crawlKey
-    crawlKey = nextKey
+    const key = d.activity || 'walk'
+    const changed = key !== crawlKey
+    crawlKey = key
     manualUntil = Date.now() + 60000
     phase = 'idle'
     clearTimeout(phaseTimer)
@@ -1136,41 +1131,33 @@
           badge: bubble.classList.contains('evolve'),
         }
         hideBubble()
-        // 桌面巡游：验证不同行为会播各自动画+台词、倒挂样式、停下收气泡。
+        // 桌面巡游：验证不同行为会播各自动画+台词、停下收气泡。
         // play() 会同步把逻辑 active 切到新视频（第 128 行），当场读 vids[active].src
         const acts = ((cfg.crawler || {}).activities) || {}
         crawlKey = '' // 确保第一次算「行为切换」，会推一句台词
-        onCrawl({ active: true, place: 'floor', activity: 'walk', inverted: false })
-        const crawlFloor =
-          document.body.classList.contains('crawling') &&
-          !document.body.classList.contains('inverted')
+        onCrawl({ active: true, activity: 'walk' })
+        const crawlOn = document.body.classList.contains('crawling')
         const walkAnim = nameOf(vids[active].src)
         const walkLine = bubbleText.textContent
         const lineShown = bubble.classList.contains('show') && !!walkLine
         // 换成小跑：动画和台词都应来自 run 池，且与 walk 不同
-        onCrawl({ active: true, place: 'floor', activity: 'run', inverted: false })
+        onCrawl({ active: true, activity: 'run' })
         const runAnim = nameOf(vids[active].src)
         const runLine = bubbleText.textContent
         // 害羞互动
-        onCrawl({ active: true, place: 'floor', activity: 'shy', inverted: false })
+        onCrawl({ active: true, activity: 'shy' })
         const shyAnim = nameOf(vids[active].src)
         const shyLine = bubbleText.textContent
-        // 倒挂
-        onCrawl({ active: true, place: 'ceiling', activity: 'walk', inverted: true })
-        const crawlHang = document.body.classList.contains('inverted')
-        const hangAnim = nameOf(vids[active].src)
         onCrawl({ active: false })
         crawlProbe = {
-          floor: crawlFloor,
-          hang: crawlHang,
+          on: crawlOn,
           off: !document.body.classList.contains('crawling'),
           lineShown,
           // 每种行为的动画确实来自各自配置池
           animPoolsOk:
             ((acts.walk || {}).anims || []).includes(walkAnim) &&
             ((acts.run || {}).anims || []).includes(runAnim) &&
-            ((acts.shy || {}).anims || []).includes(shyAnim) &&
-            ((acts.ceiling || {}).anims || []).includes(hangAnim),
+            ((acts.shy || {}).anims || []).includes(shyAnim),
           // 换行为会换台词（不是一句话到底）
           lineChanged: !!runLine && runLine !== walkLine && !!shyLine && shyLine !== walkLine,
           lineCleared: !bubble.classList.contains('show'),

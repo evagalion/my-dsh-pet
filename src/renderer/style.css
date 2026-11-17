@@ -42,13 +42,6 @@ body.through #stage {
   transition: opacity 0.25s ease;
 }
 
-/* 桌面巡游：爬到顶部菜单栏时整只鱼翻过来倒挂。
-   气泡是 body 的直接子元素、不在 stage 里，所以文字不会跟着倒。 */
-body.inverted #stage {
-  transform: rotate(180deg);
-  transition: transform 0.45s ease;
-}
-
 /* 巡游不再用固定频率的机械颠簸——那样像木偶。
    现在靠行为状态机本身（走走停停 / 小跑 / 驻足张望 / 伸懒腰）配合各自的动画，
    平移由主进程带加减速驱动，观感自然。 */

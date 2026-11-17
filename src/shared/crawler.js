@@ -1,16 +1,17 @@
 'use strict'
 
-// 桌面巡游「行为状态机」：让鱼像活物一样走走停停，而不是匀速直线当贴纸滑。
+// 桌面巡游「行为状态机」：让鱼像活物一样在屏幕底边走走停停，而不是匀速贴纸滑。
 //
-// 两层状态：
-//   place    —— 在哪里：floor（底边）/ ceiling（顶部倒挂）/ climb（正沿边缘爬）
-//   activity —— 在干嘛：walk 漫步 / run 小跑 / look 驻足张望 / stretch 伸懒腰 / shy 害羞 / greet 打招呼 / flee 溜走
+// 状态只有一个维度：activity（在干嘛）——
+//   walk 漫步 / run 小跑 / look 驻足张望 / stretch 伸懒腰 / shy 害羞 / greet 打招呼 / flee 溜走
 //
-// 关键改动（相对第一版匀速直线）：
-//  1. 速度不再是常数：vx 缓动逼近目标速度（漫步慢、小跑快、驻足为 0），起步/停下自然过渡。
-//  2. 会主动换行为：漫步一段就停下张望/伸懒腰，偶尔小跑一段。行为由「行为议程」驱动，
-//     每项有持续时长，到期换下一项。渲染层据此播不同动画+台词。
-//  3. 鼠标靠近给多种俏皮反应（害羞 / 打招呼 / 溜走）随机挑，不再是单向逃。
+// 用户明确不要倒挂：所以不再有 place（floor/ceiling/climb）和 inverted 翻转，
+// 鱼始终贴屏幕底边左右巡游，到边缘转身。垂直方向的怪动作全部删掉。
+//
+// 关键设计：
+//  1. 速度用 vx 缓动逼近目标（漫步慢、小跑快、驻足为 0），起步/停下自然过渡。
+//  2. 会主动换行为：漫步一段就停下张望/伸懒腰，偶尔小跑一段。渲染层据此播不同动画+台词。
+//  3. 鼠标靠近给多种俏皮反应（害羞 / 打招呼 / 溜走）随机挑。
 //
 // 纯函数：这里只算「下一帧坐标 + 当前行为」，不动窗口。主进程持有 state 按帧调 setPosition。
 // 只用窗口坐标 + 全局鼠标位置，不读别的窗口，不需要系统授权。
@@ -28,7 +29,6 @@ const SPEED = {
   shy: 0, // 害羞停住
   greet: 0, // 打招呼停住
   flee: 5.5, // 溜走
-  climb: 2.6, // 沿边缘爬
 }
 // 加速度：vx 每帧向目标逼近这个比例，越小越平滑（起步/刹车不会瞬移）
 const EASE = 0.18
@@ -37,7 +37,6 @@ const REACT_COOLDOWN = 4200 // 两次鼠标互动的最小间隔 ms
 const EDGE_PAUSE_MS = 600 // 到屏幕边缘转身前的停顿
 const BEHAVIOR_MIN = 2600 // 一个行为最短持续
 const BEHAVIOR_MAX = 5600 // 一个行为最长持续
-const CLIMB_MS = 6000 // 沿边缘爬的时长上限（防止卡住）
 const REACT_MS = 2200 // 害羞/打招呼/溜走这类短反应的持续
 
 // 漫步时可能切换到的「日常行为」及其权重（张望/伸懒腰多，小跑少）
@@ -57,25 +56,17 @@ function weightedBehavior() {
   return 'walk'
 }
 
-// place: floor | ceiling | climb
-function create(x, y, place, now, dir) {
-  const p = place === 'ceiling' ? 'ceiling' : 'floor'
+function create(x, y, now, dir) {
   return {
     x,
     y,
-    place: p,
     activity: 'walk', // 当前行为
     dir: dir == null ? (Math.random() < 0.5 ? 1 : -1) : dir < 0 ? -1 : 1,
     vx: 0, // 当前水平速度（缓动用）
-    edge: null,
-    targetY: null,
-    inverted: p === 'ceiling',
     behaviorUntil: now + rand(BEHAVIOR_MIN, BEHAVIOR_MAX), // 下次换日常行为
-    placeUntil: now + rand(34000, 60000), // 下次换位置（爬到顶/底）
     reactUntil: 0, // 鼠标互动冷却结束时刻
     actUntil: 0, // 当前短反应（害羞等）结束时刻，0 表示无
     pauseUntil: 0,
-    climbDeadline: 0,
   }
 }
 
@@ -99,42 +90,13 @@ function endReact(s, now) {
 }
 
 // 推进一帧。dt 保留兼容签名但位移用固定步长（防定时器抖动跳步）。
-// bounds: { x, y, width, height, floorY, ceilY, w, h }
+// bounds: { x, y, width, height, floorY, w, h }
 // mouse: {x, y} 可为 null。返回 { changed: bool } 表示行为是否变化（主进程据此推动画台词）。
 function step(s, dt, bounds, mouse, now) {
   if (!s || !bounds) return { changed: false }
   let changed = false
 
   if (s.pauseUntil > now) return { changed: false }
-
-  // 正在沿边缘爬
-  if (s.place === 'climb') {
-    if (s.activity !== 'climb') {
-      s.activity = 'climb'
-      changed = true
-    }
-    s.x = s.edge === 'left' ? bounds.x : bounds.x + bounds.width
-    const dy = s.targetY - s.y
-    const move = Math.sign(dy) * SPEED.climb
-    s.y = Math.abs(move) >= Math.abs(dy) ? s.targetY : s.y + move
-    s.y = clamp(s.y, bounds.y, bounds.y + bounds.height)
-    const arrived = s.y === s.targetY
-    const timedOut = now >= s.climbDeadline
-    if (arrived || timedOut) {
-      s.place = s.targetY <= bounds.ceilY ? 'ceiling' : 'floor'
-      s.inverted = s.place === 'ceiling'
-      s.activity = 'walk'
-      s.behaviorUntil = now + rand(BEHAVIOR_MIN, BEHAVIOR_MAX)
-      s.placeUntil = now + rand(34000, 60000)
-      s.targetY = null
-      s.vx = 0
-      s.pauseUntil = now + 300
-      changed = true
-    }
-    return { changed }
-  }
-
-  // ---- 在 floor / ceiling 巡游 ----
 
   // 鼠标互动：靠近了随机给个俏皮反应，不再只躲
   if (mouse && Number.isFinite(mouse.x) && Number.isFinite(mouse.y) && now >= s.reactUntil) {
@@ -170,9 +132,8 @@ function step(s, dt, bounds, mouse, now) {
   if (Math.abs(s.vx) < 0.05) s.vx = 0
   s.x += s.dir * s.vx
 
-  // 高度平滑靠拢当前位置（底边 / 顶部）
-  const goalY = s.place === 'floor' ? bounds.floorY : bounds.ceilY
-  s.y += (goalY - s.y) * 0.25
+  // 高度恒定贴底边（平滑靠拢，防开局跳一下）；没有任何垂直爬行/倒挂
+  s.y += (bounds.floorY - s.y) * 0.25
 
   const minX = bounds.x
   const maxX = bounds.x + bounds.width
@@ -186,16 +147,6 @@ function step(s, dt, bounds, mouse, now) {
     s.dir = -1
     s.vx = 0
     s.pauseUntil = now + EDGE_PAUSE_MS
-  }
-
-  // 位置到期 → 选近的一边爬去另一端
-  if (now >= s.placeUntil) {
-    s.edge = s.x - minX < (maxX - minX) / 2 ? 'left' : 'right'
-    s.targetY = s.place === 'floor' ? bounds.ceilY : bounds.floorY
-    s.place = 'climb'
-    s.climbDeadline = now + CLIMB_MS
-    s.pauseUntil = now + 250
-    changed = true
   }
 
   return { changed }

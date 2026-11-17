@@ -298,7 +298,7 @@ function stopFlightTimerOnly() {
 }
 
 // ---- 桌面巡游（免授权基础版）----
-// 鱼自己沿屏幕底边走、定时沿边缘爬到顶部菜单栏倒挂，鼠标靠近会躲。
+// 鱼只在屏幕底边左右巡游，走走停停、张望伸懒腰，鼠标靠近会害羞/打招呼/溜走。
 // 只用窗口坐标 + 全局鼠标位置，不读别的窗口标题栏，不需要系统授权。
 const clampNum = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
 
@@ -312,9 +312,8 @@ function crawlBounds() {
     y: full.y,
     width: Math.max(0, full.width - b.width),
     height: Math.max(0, full.height - b.height),
-    // 底边贴工作区下沿（避开 Dock），顶边贴菜单栏
+    // 底边贴工作区下沿（避开 Dock）；鱼只在底边活动，不再需要顶边
     floorY: wa.y + wa.height - b.height - 2,
-    ceilY: full.y + 2,
     w: b.width,
     h: b.height,
   }
@@ -348,7 +347,6 @@ function startCrawl() {
   crawler = crawl.create(
     clampNum(b.x, bounds.x, bounds.x + bounds.width),
     bounds.floorY,
-    'floor',
     Date.now(),
     b.x < bounds.x + bounds.width / 2 ? 1 : -1
   )
@@ -389,23 +387,13 @@ function startCrawl() {
       stopCrawl()
       return
     }
-    // 行为/位置一变就推给渲染层换动画+台词（不再是只在换模式时推）
+    // 行为一变就推给渲染层换动画+台词
     if (changed) {
-      win.webContents.send('pet:crawl', {
-        active: true,
-        place: crawler.place,
-        activity: crawler.activity,
-        inverted: crawler.inverted,
-      })
+      win.webContents.send('pet:crawl', { active: true, activity: crawler.activity })
     }
   }, 33)
 
-  win.webContents.send('pet:crawl', {
-    active: true,
-    place: 'floor',
-    activity: 'walk',
-    inverted: false,
-  })
+  win.webContents.send('pet:crawl', { active: true, activity: 'walk' })
   saveConfig(cfg)
 }
 
@@ -1190,7 +1178,7 @@ app.whenReady().then(() => {
           menuShown: labels.some((x) => typeof x === 'string' && x.indexOf('形态：') >= 0),
           replayOk: !!evolve.replay(cfg),
         }
-        // 桌面巡游行为状态机：漫步加减速、边缘转身、爬到顶倒挂、鼠标多种互动、
+        // 桌面巡游行为状态机：漫步加减速、边缘转身、恒定贴底、鼠标多种互动、
         // 行为到期主动切换、驻足速度为 0——全用纯函数 + 固定输入验，不启动定时器。
         const cBounds = {
           x: 0,
@@ -1198,14 +1186,12 @@ app.whenReady().then(() => {
           width: 1000,
           height: 700,
           floorY: 640,
-          ceilY: 2,
           w: 320,
           h: 280,
         }
         // 漫步：vx 从 0 缓动加速，鱼往前走；驻足行为 vx 应为 0
-        let cs = crawl.create(500, 640, 'floor', 0, 1)
+        let cs = crawl.create(500, 640, 100, 1)
         cs.behaviorUntil = 999999
-        cs.placeUntil = 999999
         for (let i = 0; i < 10; i++) crawl.step(cs, 0, cBounds, null, 100 + i * 33)
         const cWalk = cs.x > 500 && cs.vx > 0 && cs.activity === 'walk'
         cs.activity = 'look'
@@ -1213,44 +1199,35 @@ app.whenReady().then(() => {
         crawl.step(cs, 0, cBounds, null, 500)
         const cPauseVx = cs.vx < 1.5 // 驻足时速度在往 0 衰减
         // 边缘转身
-        cs = crawl.create(500, 640, 'floor', 0, 1)
+        cs = crawl.create(500, 640, 200, 1)
         cs.behaviorUntil = 999999
-        cs.placeUntil = 999999
         cs.x = 1000
         cs.dir = 1
         cs.pauseUntil = 0
         crawl.step(cs, 0, cBounds, null, 200)
         const cTurn = cs.dir === -1 && cs.x <= 1000
-        // 爬到顶倒挂：climb 每 tick SPEED.climb=2.6，给 320 次余量
-        cs = crawl.create(500, 640, 'floor', 0, 1)
-        cs.place = 'climb'
-        cs.edge = 'left'
-        cs.targetY = 2
-        cs.climbDeadline = 999999
-        cs.pauseUntil = 0
-        for (let i = 0; i < 320; i++) crawl.step(cs, 0, cBounds, null, 300 + i * 20)
-        const cClimb = cs.place === 'ceiling' && cs.inverted === true && cs.y === 2
-        // 鼠标靠近触发俏皮互动，且三种反应都合法
-        cs = crawl.create(500, 640, 'floor', 0, 1)
+        // 恒定贴底：从高处起步会平滑靠拢 floorY，不会爬边缘/翻到顶部
+        cs = crawl.create(500, 100, 300, 1)
         cs.behaviorUntil = 999999
-        cs.placeUntil = 999999
+        for (let i = 0; i < 30; i++) crawl.step(cs, 0, cBounds, null, 300 + i * 33)
+        const cFloor = cs.y > 100 && Math.abs(cs.y - cBounds.floorY) < 1
+        // 鼠标靠近触发俏皮互动，且三种反应都合法
         const cCenter = crawl.center(cs, cBounds)
         const reactKinds = new Set()
         for (let i = 0; i < 30; i++) {
-          const t = crawl.create(500, 640, 'floor', 0, 1)
+          const t = crawl.create(500, 640, 100, 1)
           t.behaviorUntil = 999999
-          t.placeUntil = 999999
           crawl.step(t, 0, cBounds, { x: cCenter.x + 20, y: cCenter.y }, 100)
           reactKinds.add(t.activity)
         }
         const cReact = ['shy', 'greet', 'flee'].every((k) => reactKinds.has(k))
         // 短反应到期会回漫步
-        cs = crawl.create(500, 640, 'floor', 0, 1)
+        cs = crawl.create(500, 640, 100, 1)
         crawl.react(cs, 'shy', 100)
         crawl.step(cs, 0, cBounds, null, 100 + crawl.REACT_COOLDOWN + 500)
         const cRecover = cs.activity === 'walk'
         // 每种行为的动画 + 台词都要配齐，用户才看得出「在干嘛」
-        const actKeys = ['walk', 'run', 'look', 'stretch', 'shy', 'greet', 'flee', 'climb', 'ceiling']
+        const actKeys = ['walk', 'run', 'look', 'stretch', 'shy', 'greet', 'flee']
         const acts = ((cfg.crawler || {}).activities) || {}
         const actsOk = actKeys.every(
           (k) => acts[k] && (acts[k].anims || []).length && (acts[k].lines || []).length
@@ -1259,7 +1236,7 @@ app.whenReady().then(() => {
           walk: cWalk,
           pauseVx: cPauseVx,
           turn: cTurn,
-          climb: cClimb,
+          floor: cFloor,
           react: cReact,
           recover: cRecover,
           actsOk,
@@ -1305,12 +1282,7 @@ app.whenReady().then(() => {
     if (crawlerOn && crawler && win && !win.isDestroyed()) {
       const kind = Math.random() < 0.5 ? 'shy' : 'greet'
       crawl.react(crawler, kind, Date.now())
-      win.webContents.send('pet:crawl', {
-        active: true,
-        place: crawler.place,
-        activity: crawler.activity,
-        inverted: crawler.inverted,
-      })
+      win.webContents.send('pet:crawl', { active: true, activity: crawler.activity })
     }
   })
   // 戳它 / 喂它都涨亲密度。渲染层戳的时候顺手报一下
