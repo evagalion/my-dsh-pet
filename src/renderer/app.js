@@ -71,10 +71,22 @@
   // 解码空窗里两个都不出画面，整窗透明，用户看到的就是「只剩文字、鱼不见了」；
   // 更要命的是 play() 失败被吞掉、onended 又没来时，播放链会停死在空白帧再也回不来。
   // 现在等新视频首帧就绪才切，旧画面一直留着；超时/报错/play 被拒都有兜底把链往下推。
+  // 当前真正在显示（.show）的那条 video 的索引。-1 表示两条都没画面（刚启动/异常）。
+  // 关键：active 是「逻辑指针」，每次 play 立刻 +1；但 show 要等解码好才切。二者在
+  // 快速切换/报错/兜底 advance 时会脱节。选下一条 video 必须以「实际 show」为准——
+  // 永远拿没在显示的那条当 next，否则一旦 active 与 show 脱节，就会挑中正显示的那条
+  // 改它的 src → 当前画面瞬间清空、新画面还没解码 → 两条都不可见 → 只剩气泡、鱼消失。
+  function shownIndex() {
+    return vids.findIndex((v) => v.classList.contains('show'))
+  }
+
   function play(name, opts) {
     if (!name) return
     opts = opts || {}
-    const next = vids[1 - active]
+    const cur = shownIndex()
+    // 以实际显示的画面为准选 next：CC 里若 cur=-1（两条都没 show），退回 active 的反面
+    const nextIdx = cur < 0 ? 1 - active : 1 - cur
+    const next = vids[nextIdx]
     const my = ++token
     let shown = false
     let advanced = false
@@ -84,8 +96,9 @@
       if (my !== token || shown) return
       shown = true
       if (guard) clearTimeout(guard)
-      // 按当前 active 统一收口：快速连点时被打断的那次不会把 show 留在错的元素上
-      vids.forEach((v, i) => v.classList.toggle('show', i === active))
+      // 统一收口到本次的 nextIdx：即便期间又冒出别的 play，也只认自己那条，绝不把
+      // show 留在尚未解码好的元素上。用 nextIdx 而非 active——active 可能被后续 play 改掉。
+      vids.forEach((v, i) => v.classList.toggle('show', i === nextIdx))
       // 画面已经出来了，但 onended 万一不来（解码卡住 / 媒体僵住）也别让状态机停死：
       // 把短超时换成长看门狗，素材普遍 10 秒，给 12 秒余量
       if (!opts.loop) {
@@ -124,8 +137,9 @@
         if (my === token) advance()
       })
 
-    // 逻辑上的 current 立刻切换：自检靠它同步读到本次播的到底是哪段素材
-    active = 1 - active
+    // 逻辑指针同步到本次实际选用的那条：自检靠 vids[active].src 同步读播了哪段。
+    // 用 nextIdx 而非 1-active，保证 active 与 reveal 的收口目标、与实际 src 三者一致
+    active = nextIdx
 
     guard = setTimeout(() => {
       if (my !== token || advanced) return
@@ -899,6 +913,7 @@
     let hoverVariety = null
     let revealOk = null
     let anyVisible = null
+    let noVanish = null
     let partProbe = null
     let noteProbe = null
     let speakProbe = null
@@ -1076,6 +1091,20 @@
         revealOk =
           targetVid.classList.contains('show') && !otherVid.classList.contains('show')
         anyVisible = vids.some((v) => v.classList.contains('show'))
+        // 竞态回归：制造「active 与 show 脱节」——让当前画面在 v0，但把 active 指向 v1。
+        // 旧逻辑 next=vids[1-active]=v0 会改掉正显示那条的 src → 画面清空；
+        // 新逻辑以 show 为准 next=vids[1]，正显示的 v0 不受影响，画面保住。
+        vids[0].classList.add('show')
+        vids[1].classList.remove('show')
+        const visibleSrcBefore = vids[0].src
+        active = 1 // 故意与 show(=0) 脱节
+        play('待机呼吸休闲', { loop: true })
+        noVanish =
+          vids[0].src === visibleSrcBefore && // 正显示的画面没被改 src
+          shownIndex() === 0 && // 画面仍留在 v0（等解码好才会挪走）
+          active === 1 // active 同步到新 next（v1）
+        // 收尾：让 v1 解码完成，show 正常挪过去，别把自检状态留在脱节态
+        vids[1].dispatchEvent(new Event('loadeddata'))
         // 分部位摸：命中区分三段，各段落点要判断对，且播的是该部位配的动画。
         // 心情压到 calm、亲密度压低、刚理过它（不触发 clickRule 的任何规则）
         const pr = hit.getBoundingClientRect()
@@ -1201,7 +1230,7 @@
           animPools,
           clickVariety,
           hoverVariety,
-          reveal: { revealOk, anyVisible },
+          reveal: { revealOk, anyVisible, noVanish },
           parts: partProbe,
           note: noteProbe,
           speak: speakProbe,
