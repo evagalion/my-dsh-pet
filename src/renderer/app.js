@@ -817,44 +817,54 @@
     showBubble(`${d.formLabel || '新形态'}！${d.line || ''}${perk}`, { evolve: true }, 8000)
   }
   api.on('pet:evolve', onEvolve)
-  // 桌面巡游：主进程在「开始/停下/换行为」时推，不会每帧打扰渲染层。
-  // 消息只带 activity（walk/run/look/stretch/shy/greet/flee），渲染层据此播不同动画和台词。
+  // 桌面巡游：主进程在「开始/停下/换行为/转身」时推，不会每帧打扰渲染层。
+  // 消息带 activity（walk/run/look/stretch/shy/greet/flee）和 dir（窗口移动方向 1/-1）。
   // 鱼始终在屏幕底边，没有倒挂/翻转（用户明确不要）。
   //
-  // 移动方式已改：窗口不再整体平移（那是"平移诡异"的病根），改由新素材
-  // 「大肥鱼巡游」在画面内部左右往返——脚步和位移一致。移动类行为(walk/run/flee)
-  // 播这段画内素材；驻足类(look/stretch/shy/greet)仍播各自动画，靠状态机切换。
+  // 移动方式：窗口真的沿桌面底边平移（鱼在大范围溜达、气泡跟着窗口=跟着鱼），
+  // 素材只负责"朝对方向迈步"——往左移播朝左的走路素材、往右移播镜像的朝右素材，
+  // 脚步方向和位移方向一致，消除过去"踩着隐形滑板平移"的诡异感。
   let crawlKey = ''
+  let crawlDir = 0
+  let crawlPrevKeyForLine = ''
   function onCrawl(d) {
     if (!d) return
     document.body.classList.toggle('crawling', d.active !== false)
     if (d.active === false) {
       crawlKey = ''
+      crawlDir = 0
+      crawlPrevKeyForLine = ''
       manualUntil = 0
       hideBubble() // 收掉巡游台词，别停在半空
       return
     }
     const key = d.activity || 'walk'
-    const changed = key !== crawlKey
+    const dir = d.dir === -1 ? -1 : 1
+    const changed = key !== crawlKey || dir !== crawlDir
     crawlKey = key
+    crawlDir = dir
     manualUntil = Date.now() + 60000
     phase = 'idle'
     clearTimeout(phaseTimer)
     clearRotate()
     const c = cfg.crawler || {}
     const one = ((c.activities || {})[key]) || {}
-    const travel = c.travelAnim || '大肥鱼巡游'
     const isTravel = (c.travelActivities || ['walk', 'run', 'flee']).indexOf(key) >= 0
-    // 移动类行为固定播画内巡游素材（保证走动观感一致、不因随机换段导致方向跳变）；
-    // 驻足类行为才按池抽各自动画。
+    // 移动类行为：按窗口方向选走路素材（dir<0 朝左用原图，dir>0 朝右用镜像），
+    // 让脚步和真实位移方向一致。驻足类行为才按池抽各自动画。
+    const travel = dir < 0 ? (c.travelLeft || '巡游走路-左') : (c.travelRight || '巡游走路-右')
     const anim = isTravel ? travel : pickNoRepeat(one.anims, 'anim:crawl-' + key)
     // 一律 loop：短反应到期后主进程会推 walk 覆盖，不会停在末帧；
     // loop 也避免 unknown 动画卡住播放链（巡游期间没有 onEnd 兜底链）。
-    play(anim || travel || '螃蟹走路', { loop: true })
-    if (changed) {
+    // 仅在实际需要换片时才 play，避免同一段被重复 play 导致每帧从头重播。
+    if (changed || !(vids[shownIndex()] && nameOf(vids[shownIndex()].src) === anim)) {
+      play(anim || travel || '巡游走路-左', { loop: true })
+    }
+    if (key !== crawlPrevKeyForLine) {
       const line = pickNoRepeat(one.lines, 'line:crawl-' + key) || '我自己溜达会儿~'
-      // 气泡常驻到下次行为切换，行为一换就换台词
+      // 气泡常驻到下次行为切换，行为一换就换台词（单纯转身不换台词）
       showBubble(line, null, 0)
+      crawlPrevKeyForLine = key
     }
   }
   api.on('pet:crawl', onCrawl)
@@ -1172,19 +1182,23 @@
         // play() 会同步把逻辑 active 切到新视频（第 128 行），当场读 vids[active].src
         const acts = ((cfg.crawler || {}).activities) || {}
         const crawCfg = cfg.crawler || {}
-        const travelAnim = crawCfg.travelAnim || '大肥鱼巡游'
+        const travelLeft = crawCfg.travelLeft || '巡游走路-左'
+        const travelRight = crawCfg.travelRight || '巡游走路-右'
         crawlKey = '' // 确保第一次算「行为切换」，会推一句台词
-        onCrawl({ active: true, activity: 'walk' })
+        // 往左走：应播朝左素材
+        onCrawl({ active: true, activity: 'walk', dir: -1 })
         const crawlOn = document.body.classList.contains('crawling')
         const walkAnim = nameOf(vids[active].src)
         const walkLine = bubbleText.textContent
         const lineShown = bubble.classList.contains('show') && !!walkLine
-        // 换成小跑：移动类行为仍用画内巡游素材，但台词来自 run 池
-        onCrawl({ active: true, activity: 'run' })
+        // 转身往右走：行为没变但方向变了，应播镜像的朝右素材
+        onCrawl({ active: true, activity: 'walk', dir: 1 })
+        const dirFlipAnim = nameOf(vids[active].src)
+        // 小跑 + 害羞互动
+        onCrawl({ active: true, activity: 'run', dir: -1 })
         const runAnim = nameOf(vids[active].src)
         const runLine = bubbleText.textContent
-        // 害羞互动：驻足类，动画来自 shy 池
-        onCrawl({ active: true, activity: 'shy' })
+        onCrawl({ active: true, activity: 'shy', dir: -1 })
         const shyAnim = nameOf(vids[active].src)
         const shyLine = bubbleText.textContent
         onCrawl({ active: false })
@@ -1192,14 +1206,18 @@
           on: crawlOn,
           off: !document.body.classList.contains('crawling'),
           lineShown,
-          // 移动类行为(walk/run)必须播画内巡游素材；驻足类(shy)来自各自配置池
+          // 移动类按方向选素材：左→左片、右→右片；驻足类(shy)来自各自配置池
           animPoolsOk:
-            walkAnim === travelAnim &&
-            runAnim === travelAnim &&
+            walkAnim === travelLeft &&
+            dirFlipAnim === travelRight &&
+            runAnim === travelLeft &&
             ((acts.shy || {}).anims || []).includes(shyAnim),
-          // 巡游素材确实存在于资源池里（能加载）
-          travelOk: (boot.assets || []).includes(travelAnim),
-          travelAnim,
+          // 转身会换素材（脚步方向跟位移方向）
+          dirFlipOk: walkAnim !== dirFlipAnim,
+          // 两份走路素材都在资源池里（能加载）
+          travelOk: (boot.assets || []).includes(travelLeft) && (boot.assets || []).includes(travelRight),
+          travelLeft,
+          travelRight,
           // 换行为会换台词（不是一句话到底）
           lineChanged: !!runLine && runLine !== walkLine && !!shyLine && shyLine !== walkLine,
           lineCleared: !bubble.classList.contains('show'),
