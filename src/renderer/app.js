@@ -820,6 +820,10 @@
   // 桌面巡游：主进程在「开始/停下/换行为」时推，不会每帧打扰渲染层。
   // 消息只带 activity（walk/run/look/stretch/shy/greet/flee），渲染层据此播不同动画和台词。
   // 鱼始终在屏幕底边，没有倒挂/翻转（用户明确不要）。
+  //
+  // 移动方式已改：窗口不再整体平移（那是"平移诡异"的病根），改由新素材
+  // 「大肥鱼巡游」在画面内部左右往返——脚步和位移一致。移动类行为(walk/run/flee)
+  // 播这段画内素材；驻足类(look/stretch/shy/greet)仍播各自动画，靠状态机切换。
   let crawlKey = ''
   function onCrawl(d) {
     if (!d) return
@@ -839,10 +843,14 @@
     clearRotate()
     const c = cfg.crawler || {}
     const one = ((c.activities || {})[key]) || {}
-    const anim = pickNoRepeat(one.anims, 'anim:crawl-' + key)
+    const travel = c.travelAnim || '大肥鱼巡游'
+    const isTravel = (c.travelActivities || ['walk', 'run', 'flee']).indexOf(key) >= 0
+    // 移动类行为固定播画内巡游素材（保证走动观感一致、不因随机换段导致方向跳变）；
+    // 驻足类行为才按池抽各自动画。
+    const anim = isTravel ? travel : pickNoRepeat(one.anims, 'anim:crawl-' + key)
     // 一律 loop：短反应到期后主进程会推 walk 覆盖，不会停在末帧；
     // loop 也避免 unknown 动画卡住播放链（巡游期间没有 onEnd 兜底链）。
-    play(anim || '螃蟹走路', { loop: true })
+    play(anim || travel || '螃蟹走路', { loop: true })
     if (changed) {
       const line = pickNoRepeat(one.lines, 'line:crawl-' + key) || '我自己溜达会儿~'
       // 气泡常驻到下次行为切换，行为一换就换台词
@@ -1163,17 +1171,19 @@
         // 桌面巡游：验证不同行为会播各自动画+台词、停下收气泡。
         // play() 会同步把逻辑 active 切到新视频（第 128 行），当场读 vids[active].src
         const acts = ((cfg.crawler || {}).activities) || {}
+        const crawCfg = cfg.crawler || {}
+        const travelAnim = crawCfg.travelAnim || '大肥鱼巡游'
         crawlKey = '' // 确保第一次算「行为切换」，会推一句台词
         onCrawl({ active: true, activity: 'walk' })
         const crawlOn = document.body.classList.contains('crawling')
         const walkAnim = nameOf(vids[active].src)
         const walkLine = bubbleText.textContent
         const lineShown = bubble.classList.contains('show') && !!walkLine
-        // 换成小跑：动画和台词都应来自 run 池，且与 walk 不同
+        // 换成小跑：移动类行为仍用画内巡游素材，但台词来自 run 池
         onCrawl({ active: true, activity: 'run' })
         const runAnim = nameOf(vids[active].src)
         const runLine = bubbleText.textContent
-        // 害羞互动
+        // 害羞互动：驻足类，动画来自 shy 池
         onCrawl({ active: true, activity: 'shy' })
         const shyAnim = nameOf(vids[active].src)
         const shyLine = bubbleText.textContent
@@ -1182,11 +1192,14 @@
           on: crawlOn,
           off: !document.body.classList.contains('crawling'),
           lineShown,
-          // 每种行为的动画确实来自各自配置池
+          // 移动类行为(walk/run)必须播画内巡游素材；驻足类(shy)来自各自配置池
           animPoolsOk:
-            ((acts.walk || {}).anims || []).includes(walkAnim) &&
-            ((acts.run || {}).anims || []).includes(runAnim) &&
+            walkAnim === travelAnim &&
+            runAnim === travelAnim &&
             ((acts.shy || {}).anims || []).includes(shyAnim),
+          // 巡游素材确实存在于资源池里（能加载）
+          travelOk: (boot.assets || []).includes(travelAnim),
+          travelAnim,
           // 换行为会换台词（不是一句话到底）
           lineChanged: !!runLine && runLine !== walkLine && !!shyLine && shyLine !== walkLine,
           lineCleared: !bubble.classList.contains('show'),

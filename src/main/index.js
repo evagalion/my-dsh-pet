@@ -337,15 +337,26 @@ function stopCrawl() {
 
 function startCrawl() {
   if (!win || win.isDestroyed() || (cfg.crawler && cfg.crawler.enabled === false)) return
-  stopFlight() // 跟抛掷/走路互斥，别两个定时器一起推同一个窗口
+  stopFlight() // 跟抛掷/走路互斥
   stopCrawlTimerOnly()
   const b = win.getBounds()
   const bounds = crawlBounds()
   crawlerOn = true
   cfg.crawler = cfg.crawler || {}
   cfg.crawler.on = true
+
+  // 新方案：窗口不再逐帧平移（那正是"平移诡异"的病根）。窗口固定在屏幕底边，
+  // 鱼的左右移动交给新素材「大肥鱼巡游」在画面内部完成——脚步和位移天然一致。
+  // 这里把窗口一次性贴到底边、水平位置保持在原处（夹进屏幕内）。
+  const dockX = clampNum(b.x, bounds.x, bounds.x + bounds.width)
+  try {
+    win.setPosition(Math.round(dockX), Math.round(bounds.floorY))
+  } catch (e) {
+    /* 定位失败也不影响动画本身 */
+  }
+
   crawler = crawl.create(
-    clampNum(b.x, bounds.x, bounds.x + bounds.width),
+    clampNum(dockX, bounds.x, bounds.x + bounds.width),
     bounds.floorY,
     Date.now(),
     b.x < bounds.x + bounds.width / 2 ? 1 : -1
@@ -353,8 +364,6 @@ function startCrawl() {
 
   let mouse = null
   let tick = 0
-  let lastX = NaN
-  let lastY = NaN
   crawlerTimer = setInterval(() => {
     if (!crawlerOn || !crawler || !win || win.isDestroyed()) {
       stopCrawl()
@@ -372,17 +381,13 @@ function startCrawl() {
     }
     let changed = false
     try {
+      // 窗口固定了，鼠标互动的中心必须锁在窗口上（否则 x 一路推进会让"靠近判定"跑偏）。
+      // 每帧把状态机坐标钉回窗口位置：行为到期切换、鼠标靠近互动照常运作，
+      // 边界转身交给画内巡游素材自己完成（素材内部就是往返的）。
+      crawler.x = dockX
+      crawler.y = bounds.floorY
       const r = crawl.step(crawler, 0, bounds, mouse, now)
       changed = !!r.changed
-      const x = Math.round(crawler.x)
-      const y = Math.round(crawler.y)
-      // 坐标没变就别调 setPosition：macOS 每次调用都会触发窗口重绘合成，
-      // 停顿/贴边时坐标不变，跳过能明显减少无谓的合成、让动画更顺。
-      if (x !== lastX || y !== lastY) {
-        win.setPosition(x, y)
-        lastX = x
-        lastY = y
-      }
     } catch (e) {
       stopCrawl()
       return
