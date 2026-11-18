@@ -126,10 +126,18 @@ function step(s, dt, bounds, mouse, now) {
     s.behaviorUntil = now + rand(BEHAVIOR_MIN, BEHAVIOR_MAX)
   }
 
-  // 速度缓动逼近目标：起步/刹车自然，不是瞬间变速
+  // 速度控制：动画和位移必须严格一致——
+  // 移动类行为（walk/run/flee）保留缓动起步，加速自然；
+  // 静止类行为（look/stretch/shy/greet，目标速度 0）必须立刻停住，
+  // 否则渲染层已经切到静止动画、窗口却还靠残余速度滑行，
+  // 就是用户看到的「不是奔跑动画也在移动」诡异感。
   const target = SPEED[s.activity] || 0
-  s.vx += (target - s.vx) * EASE
-  if (Math.abs(s.vx) < 0.05) s.vx = 0
+  if (target === 0) {
+    s.vx = 0
+  } else {
+    s.vx += (target - s.vx) * EASE
+    if (Math.abs(s.vx) < 0.05) s.vx = 0
+  }
   s.x += s.dir * s.vx
 
   // 高度恒定贴底边（平滑靠拢，防开局跳一下）；没有任何垂直爬行/倒挂

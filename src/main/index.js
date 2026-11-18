@@ -1203,8 +1203,11 @@ app.whenReady().then(() => {
         const cWalk = cs.x > 500 && cs.vx > 0 && cs.activity === 'walk'
         cs.activity = 'look'
         cs.vx = 1.5
+        const xBeforePause = cs.x
         crawl.step(cs, 0, cBounds, null, 500)
-        const cPauseVx = cs.vx < 1.5 // 驻足时速度在往 0 衰减
+        // 静止类行为必须「立刻停住」：vx 归零、坐标不再滑，
+        // 才能和渲染层同一帧切到的静止动画严格同步。
+        const cPauseVx = cs.vx === 0 && cs.x === xBeforePause
         // 边缘转身
         cs = crawl.create(500, 640, 200, 1)
         cs.behaviorUntil = 999999
