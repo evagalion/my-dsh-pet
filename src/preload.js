@@ -10,6 +10,15 @@ contextBridge.exposeInMainWorld('petAPI', {
   click: () => ipcRenderer.send('pet:click'),
   bond: (kind) => ipcRenderer.send('pet:bond', kind),
   openMenu: () => ipcRenderer.send('pet:menu'),
+  menuOpen: () => ipcRenderer.send('pet:menu-open'),
+  menuClose: () => ipcRenderer.send('pet:menu-close'),
+  menuData: () => ipcRenderer.invoke('pet:menu-data'),
+  action: (name) => ipcRenderer.send('pet:action', name),
+  gameOpen: () => ipcRenderer.send('pet:game-open'),
+  gameClose: () => ipcRenderer.send('pet:game-close'),
+  // 弹弓瞄准弹道：渲染层算好相对窗口的抛物线点，主进程换算成屏幕坐标画到目标层
+  sgAim: (points) => ipcRenderer.send('pet:sg-aim', points),
+  sgAimClear: () => ipcRenderer.send('pet:sg-aim-clear'),
   walk: (dist, ms) => ipcRenderer.send('pet:walk', dist, ms),
   selftest: (data) => ipcRenderer.send('pet:selftest', data),
   debug: (data) => ipcRenderer.send('pet:debug', data),
@@ -38,6 +47,17 @@ contextBridge.exposeInMainWorld('petAPI', {
       'pet:play',
       'pet:walk-done',
       'pet:reload-config',
+      'pet:open-game',
+      'pet:target-hit',
+      'sg:score',
+      'sg:clear',
+      'sg:level',
+      'sg:ammo',
+      'sg:fail',
+      'sg:respawn',
+      'pet:barrier-down',
+      'pet:barrier-move',
+      'pet:barrier-up',
     ]
     if (!valid.includes(channel)) return
     ipcRenderer.on(channel, (_e, payload) => fn(payload))

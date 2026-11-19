@@ -240,6 +240,428 @@ body.through #stage {
   }
 }
 
+/* 菜单打开时铺一层透明遮罩，把整个窗口的点击都接住：
+   桌宠窗口平时是穿透的（stage pointer-events:none，只有 #hit 吃鼠标），
+   不铺遮罩的话点菜单外的空白处，事件直接穿透到桌面，JS 根本收不到、关不掉菜单。
+   遮罩在鱼之上、菜单之下；点它就是点"菜单外"，由 JS 收起菜单。 */
+.menu-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  display: none;
+  pointer-events: none;
+}
+body.menu-open .menu-scrim {
+  display: block;
+  pointer-events: auto;
+}
+
+/* ===== 自绘气泡菜单 =====
+   右键时主进程把窗口向上扩展 MENU_EXTRA_H，鱼贴底不动，
+   菜单就落在窗口顶部新腾出来的空白里。整层默认不吃鼠标，
+   只有菜单项本身可点；点菜单外由 JS 收起。 */
+.action-menu {
+  z-index: 9;
+  position: absolute;
+  left: 50%;
+  /* 贴着鱼头顶长出来（复用台词气泡算好的 --bubble-bottom），不再飘在扩窗后的窗口顶 */
+  bottom: calc(var(--bubble-bottom, 155px) + 4px);
+  transform: translateX(-50%) translateY(8px);
+  width: 268px;
+  max-width: 96%;
+  max-height: calc(100% - var(--bubble-bottom, 155px) - 12px);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.18s ease, transform 0.18s ease, visibility 0.18s;
+}
+
+/* 菜单打开时，鱼淡出一点，让视觉焦点集中在菜单上（但鱼还在原地） */
+body.menu-open .pet.show {
+  opacity: 0.5;
+}
+
+.action-menu.show {
+  opacity: 1;
+  visibility: visible;
+  transform: translateX(-50%) translateY(0);
+}
+
+.action-menu-title {
+  align-self: center;
+  padding: 3px 12px;
+  border-radius: 12px;
+  background: rgba(55, 138, 221, 0.92);
+  color: #fff;
+  font: 500 12px/1.5 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  box-shadow: 0 2px 8px rgba(24, 95, 165, 0.25);
+}
+
+.action-menu-items {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  pointer-events: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(55, 138, 221, 0.35) transparent;
+}
+.action-menu-items::-webkit-scrollbar {
+  width: 5px;
+}
+.action-menu-items::-webkit-scrollbar-thumb {
+  background: rgba(55, 138, 221, 0.35);
+  border-radius: 3px;
+}
+
+.action-group-title {
+  flex: none;
+  padding: 6px 4px 1px;
+  color: #7a8fa3;
+  font: 500 11px/1.4 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  letter-spacing: 0.5px;
+}
+
+/* 只读状态行：像气泡但不吃鼠标、不高亮 */
+.action-item-info {
+  cursor: default;
+  background: rgba(247, 250, 253, 0.92);
+}
+.action-item-info:hover {
+  background: rgba(247, 250, 253, 0.92);
+  border-color: rgba(0, 0, 0, 0.1);
+}
+.action-item-info .ico {
+  background: var(--tint-bg, #eef2f6);
+  color: var(--tint, #6b7c8c);
+}
+
+/* 退出：红色调 */
+.action-item-danger .ico {
+  background: var(--tint-bg, #fbecec);
+  color: var(--tint, #c0392b);
+}
+.action-item-danger:hover {
+  background: #fdf0f0;
+  border-color: rgba(192, 57, 43, 0.4);
+}
+
+/* ===== 主页面：3×3 图标宫格，一眼看完（含「玩弹弓」共 9 项）===== */
+.action-menu.page-main .action-menu-items {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 7px;
+  overflow: visible;
+}
+.action-menu.page-main .action-item {
+  flex-direction: column;
+  justify-content: center;
+  gap: 5px;
+  padding: 9px 2px 8px;
+  border-radius: 13px;
+  text-align: center;
+  box-shadow: none;
+}
+.action-menu.page-main .action-item .ico {
+  width: 34px;
+  height: 34px;
+  border-radius: 11px;
+  font-size: 16px;
+}
+.action-menu.page-main .action-item .txt {
+  flex: none;
+  font-size: 11px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.action-menu.page-main .action-item:active {
+  transform: scale(0.94);
+}
+
+/* ===== 更多页·目录：分组块也用宫格，和主菜单同一套视觉 ===== */
+.action-menu.page-more:not(.page-more-group) .action-menu-items {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 7px;
+  overflow: visible;
+}
+/* 返回行独占整行（宫格里不按格子排） */
+.action-menu.page-more:not(.page-more-group) .action-menu-items > .action-item:first-child {
+  grid-column: 1 / -1;
+  flex-direction: row;
+  justify-content: flex-start;
+  padding: 6px 10px;
+  box-shadow: 0 2px 7px rgba(0, 0, 0, 0.1);
+}
+.action-menu.page-more:not(.page-more-group) .action-menu-items > .action-item:first-child .ico {
+  width: 26px;
+  height: 26px;
+  font-size: 14px;
+}
+/* 分组块：竖排图标+文字，宫格视觉 */
+.action-menu.page-more:not(.page-more-group) .group-tile {
+  flex-direction: column;
+  justify-content: center;
+  gap: 5px;
+  padding: 12px 2px 10px;
+  border-radius: 13px;
+  text-align: center;
+  box-shadow: none;
+}
+.action-menu.page-more:not(.page-more-group) .group-tile .ico {
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  font-size: 19px;
+}
+.action-menu.page-more:not(.page-more-group) .group-tile .txt {
+  flex: none;
+  font-size: 11px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.action-menu.page-more:not(.page-more-group) .group-tile:active {
+  transform: scale(0.94);
+}
+
+/* ===== 更多页：分组默认收起，点标题展开 ===== */
+.action-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.action-group-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid rgba(0, 0, 0, 0.09);
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.96);
+  color: #3a4b5a;
+  font: 500 12px/1.4 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  cursor: pointer;
+  pointer-events: auto;
+  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.07);
+  opacity: 0;
+  transform: translateY(6px);
+}
+/* 分组图标：跟功能项一样的浅底彩块 */
+.action-group-head .grp-ico {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  background: var(--tint-bg, #eaf3fb);
+  font-size: 14px;
+}
+.action-group-head .grp-label {
+  flex: 1;
+  text-align: left;
+}
+.action-group-head:hover {
+  background: var(--tint-bg, #eaf3fb);
+  border-color: var(--tint, rgba(55, 138, 221, 0.45));
+}
+.action-menu.show .action-group-head {
+  animation: itemIn 0.22s ease forwards;
+  animation-delay: calc(var(--i) * 30ms);
+}
+.action-group-head .grp-count {
+  color: #9aa8b4;
+  font-size: 11px;
+  font-weight: 400;
+}
+.action-group-body {
+  max-height: 0;
+  overflow: hidden;
+  opacity: 0;
+  transition: max-height 0.24s ease, opacity 0.18s ease, margin 0.24s ease;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.action-group.expanded .action-group-body {
+  max-height: 520px;
+  opacity: 1;
+  margin: 5px 0 3px;
+}
+/* 组内页：整页就是一个展开组，放宽高度上限，项目多时不截断 */
+.action-menu.page-more-group .action-group.expanded .action-group-body {
+  max-height: none;
+  margin: 5px 0 0;
+}
+/* 组内页功能宫格用 3 列：每格更宽，长文字 1~2 行不碎、不出画 */
+.action-menu.page-more-group .action-group-body.grp-grid:not(.grp-info) {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+/* 功能分组展开后用彩色宫格，和主菜单 4×2 同一套视觉语言 */
+.action-group-body.grp-grid {
+  display: grid;
+  /* minmax(0,1fr)：防止长文字把某一列撑宽，保证 4 列等宽 */
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 7px;
+}
+.action-group-body.grp-grid .action-item {
+  flex-direction: column;
+  justify-content: flex-start;
+  align-items: stretch;
+  gap: 5px;
+  min-width: 0; /* 允许格子收缩到列宽内，否则文字 nowrap 会顶宽 */
+  min-height: 74px;
+  padding: 9px 4px 8px;
+  border-radius: 13px;
+  text-align: center;
+  box-shadow: none;
+  overflow: hidden;
+}
+.action-group-body.grp-grid .action-item .ico {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  margin: 0 auto;
+  border-radius: 11px;
+  font-size: 16px;
+}
+/* 文字允许换行、最多 2 行，超出省略；min-width:0 配合父格收缩 */
+.action-group-body.grp-grid .action-item .txt {
+  flex: none;
+  width: 100%;
+  min-width: 0;
+  font-size: 11px;
+  line-height: 1.25;
+  white-space: normal;
+  word-break: break-word;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+.action-group-body.grp-grid .action-item:active {
+  transform: scale(0.94);
+}
+/* 纯信息组（状态）：2 列宫格 + 文字换行，长文案不会被截断 */
+.action-group-body.grp-grid.grp-info {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.action-group-body.grp-info .action-item {
+  align-items: center;
+  gap: 4px;
+  min-height: 64px;
+  padding: 8px 4px;
+  cursor: default;
+}
+.action-group-body.grp-info .action-item .ico {
+  width: 30px;
+  height: 30px;
+  font-size: 15px;
+}
+.action-group-body.grp-info .action-item .txt {
+  white-space: normal;
+  text-align: center;
+  font-size: 10px;
+  line-height: 1.25;
+  -webkit-line-clamp: 3;
+}
+
+.action-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.96);
+  color: #2c2c2a;
+  font: 400 13px/1.4 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: 0 2px 7px rgba(0, 0, 0, 0.1);
+  pointer-events: auto;
+  /* 逐项弹出：由 JS 设置 --i，错峰淡入 */
+  opacity: 0;
+  transform: translateY(6px);
+}
+
+.action-menu.show .action-item {
+  animation: itemIn 0.22s ease forwards;
+  animation-delay: calc(var(--i) * 35ms);
+}
+
+@keyframes itemIn {
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.action-item:hover {
+  background: var(--tint-bg, #eaf3fb);
+  border-color: var(--tint, rgba(55, 138, 221, 0.45));
+}
+
+.action-item:active {
+  transform: scale(0.97);
+}
+
+.action-item .ico {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  background: var(--tint-bg, #eaf3fb);
+  color: var(--tint, #185fa5);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.action-item:hover .ico {
+  background: var(--tint, #d4e7f9);
+  color: #fff;
+}
+
+.action-item .txt {
+  flex: 1;
+}
+
+.action-item .hint {
+  flex: none;
+  color: #a0a09a;
+  font-size: 11px;
+}
+
+/* 菜单收起动画关掉逐项动画，避免收起时还闪一下 */
+.action-menu:not(.show) .action-item {
+  animation: none;
+  opacity: 0;
+  transform: translateY(6px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .action-menu,
+  .action-item {
+    transition: none;
+    animation: none !important;
+    opacity: 1;
+    transform: none;
+  }
+}
+
 /* 喂食：食物标签从右上角飘到鱼嘴边，再淡掉。纯 CSS，不额外用素材 */
 #food {
   position: absolute;

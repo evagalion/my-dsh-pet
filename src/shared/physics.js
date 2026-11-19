@@ -15,7 +15,9 @@ function createFlight(x, y, vx, vy) {
 }
 
 // 推进一帧。bounds 为可移动区域（已扣除宠物尺寸）。
-function step(s, dt, bounds) {
+// opts.ceiling === false 时不拦上沿：弹弓模式要像愤怒小鸟那样，
+// 允许鱼飞出屏幕上沿沿完整抛物线命中右侧罐塔，而不是被顶边弹回来。
+function step(s, dt, bounds, opts) {
   if (!s.flying) return s
 
   s.vy += GRAVITY * dt
@@ -43,7 +45,8 @@ function step(s, dt, bounds) {
     }
   }
 
-  if (s.y <= minY) {
+  const ceilingOn = !opts || opts.ceiling !== false
+  if (ceilingOn && s.y <= minY) {
     s.y = minY
     s.vy = Math.abs(s.vy) * CEIL_BOUNCE
   }

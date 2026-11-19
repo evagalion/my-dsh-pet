@@ -454,6 +454,18 @@
       clientY: e.clientY,
     })
     if (e.button !== 0) return
+    // 弹弓模式：拖拽改为「拉皮筋蓄力」，不移动窗口；松手弹射由 SlingshotGame 处理
+    if (window.SlingshotGame && window.SlingshotGame.isOpen()) {
+      // 必须捕获指针：鱼命中区很小，往后拉时鼠标会移出这个透明小窗口，
+      // 不捕获的话 pointermove/up 会丢、松手那一下还会点到下面的其它软件。
+      try {
+        hit.setPointerCapture(e.pointerId)
+      } catch (err) {
+        /* noop */
+      }
+      window.SlingshotGame.beginDrag(e)
+      return
+    }
     dragging = true
     downAt = performance.now()
     lastX = typeof e.screenX === 'number' ? e.screenX : null
@@ -473,6 +485,10 @@
   })
 
   hit.addEventListener('pointermove', (e) => {
+    if (window.SlingshotGame && window.SlingshotGame.isOpen()) {
+      window.SlingshotGame.moveDrag(e)
+      return
+    }
     if (!dragging) return
 
     // movementX/Y 是浏览器给的原生位移，最可靠；拿不到就退回 screenX 差值
@@ -510,6 +526,16 @@
   })
 
   hit.addEventListener('pointerup', (e) => {
+    if (window.SlingshotGame && window.SlingshotGame.isOpen()) {
+      try {
+        hit.releasePointerCapture(e.pointerId)
+      } catch (err) {
+        /* noop */
+      }
+      const shot = window.SlingshotGame.releaseDrag()
+      if (shot) api.throw(shot.vx, shot.vy)
+      return
+    }
     if (!dragging) return
     dbg('pointerup', { movedDist, vel })
     dragging = false
@@ -535,9 +561,278 @@
     }
   })
 
+  hit.addEventListener('pointercancel', (e) => {
+    if (window.SlingshotGame && window.SlingshotGame.isOpen()) {
+      try {
+        hit.releasePointerCapture(e.pointerId)
+      } catch (err) {
+        /* noop */
+      }
+      const shot = window.SlingshotGame.releaseDrag()
+      if (shot) api.throw(shot.vx, shot.vy)
+    }
+  })
+
   hit.addEventListener('contextmenu', (e) => {
     e.preventDefault()
-    api.openMenu()
+    toggleActionMenu()
+  })
+
+  // ===== 自绘气泡菜单 =====
+  // 两页：主页面 8 个高频项；「更多 ›」翻到子页，状态/设置/打开/退出全在里面，
+  // 全程不弹原生菜单。打开时主进程把窗口向上扩，鱼贴底不动，菜单长在头顶空白里。
+  const actionMenu = document.getElementById('action-menu')
+  const actionMenuItems = document.getElementById('action-menu-items')
+  const actionMenuTitle = actionMenu.querySelector('.action-menu-title')
+  let menuOpen = false
+  let menuPage = 'main' // 'main' | 'more'（分组宫格目录）| 'group'（组内宫格）
+  let moreGroups = [] // 缓存更多页分组数据，供目录→组内→返回复用
+
+  // 主页面动作清单。每项自带 icon（emoji）+ 主题色（ico/tint），特殊动作 __more__/__back__ 只翻页。
+  function actionList() {
+    const c = cfg || {}
+    const list = [
+      { action: 'chat', ico: '💬', tint: '#378add', txt: '聊聊天', hint: '打开对话', enabled: true },
+      { action: 'poke', ico: '🤚', tint: '#e0679a', txt: '摸一下', hint: '', enabled: true },
+      { action: 'rps', ico: '✊', tint: '#e08a3c', txt: '猜个拳', hint: '石头剪刀布', enabled: (c.rps || {}).enabled !== false },
+      { action: 'note', ico: '📝', tint: '#b8860b', txt: '递纸条', hint: '', enabled: (c.note || {}).enabled !== false },
+      { action: 'feed', ico: '🍚', tint: '#4c9e6a', txt: '喂一口', hint: '', enabled: c.feed && c.feed.enabled !== false },
+      { action: 'speak', ico: '💭', tint: '#7b6cd4', txt: '在干嘛', hint: '', enabled: true },
+      {
+        action: 'crawl',
+        ico: '🐾',
+        tint: '#2a9d8f',
+        txt: document.body.classList.contains('crawling') ? '停巡游' : '桌面巡游',
+        hint: '',
+        enabled: (c.crawler || {}).enabled !== false,
+      },
+      {
+        action: 'game',
+        ico: '🎯',
+        tint: '#e0679a',
+        txt: document.body.classList.contains('slingshot-mode') ? '结束弹弓' : '玩弹弓',
+        hint: document.body.classList.contains('slingshot-mode') ? '退出发射器' : '弹射我自己',
+        enabled: true,
+      },
+      { action: '__more__', ico: '⚙️', tint: '#7d8a99', txt: '更多', hint: '状态 / 设置 / 退出', enabled: true },
+    ]
+    return list.filter((x) => x.enabled)
+  }
+
+  // 把主题色挂到按钮容器上：--tint 主色（hover/边框），--tint-bg 与白混合的浅底。
+  // 自己算浅色而不依赖 color-mix，兼容旧版 Chromium；CSS 变量会继承到子图标。
+  function softTint(hex, whiteRatio) {
+    const m = /^#?([0-9a-f]{6})$/i.exec(hex || '')
+    if (!m) return ''
+    const n = parseInt(m[1], 16)
+    const r = (n >> 16) & 255
+    const g = (n >> 8) & 255
+    const b = n & 255
+    const mix = (c) => Math.round(c * (1 - whiteRatio) + 255 * whiteRatio)
+    return `rgb(${mix(r)}, ${mix(g)}, ${mix(b)})`
+  }
+  function applyTint(el, tint) {
+    if (!tint) return
+    el.style.setProperty('--tint', tint)
+    el.style.setProperty('--tint-bg', softTint(tint, 0.86))
+  }
+
+  // 造一个气泡按钮。点击：翻页动作切页；普通动作收起菜单并分发；readonly 不可点。
+  // compact=true 用于宫格主页面：不显示 hint，靠 CSS 把图标放上、文字放下。
+  function makeItem(it, i, compact) {
+    if (it.readonly) {
+      const row = document.createElement('div')
+      row.className = 'action-item action-item-info'
+      row.setAttribute('role', 'menuitem')
+      applyTint(row, it.tint)
+      const ico = document.createElement('span')
+      ico.className = 'ico'
+      ico.textContent = it.ico
+      const txt = document.createElement('span')
+      txt.className = 'txt'
+      txt.textContent = it.txt
+      row.appendChild(ico)
+      row.appendChild(txt)
+      return row
+    }
+    const btn = document.createElement('button')
+    btn.className = 'action-item' + (it.danger ? ' action-item-danger' : '')
+    btn.type = 'button'
+    btn.setAttribute('role', 'menuitem')
+    btn.dataset.action = it.action || ''
+    btn.style.setProperty('--i', i)
+    applyTint(btn, it.tint)
+    const ico = document.createElement('span')
+    ico.className = 'ico'
+    ico.textContent = it.ico
+    const txt = document.createElement('span')
+    txt.className = 'txt'
+    txt.textContent = it.txt
+    btn.appendChild(ico)
+    btn.appendChild(txt)
+    if (it.hint && !compact) {
+      const hint = document.createElement('span')
+      hint.className = 'hint'
+      hint.textContent = it.hint
+      btn.appendChild(hint)
+    }
+    btn.addEventListener('click', (ev) => {
+      ev.stopPropagation()
+      if (it.action === '__more__') {
+        showMorePage()
+        return
+      }
+      if (it.action === '__back__') {
+        showMainPage()
+        return
+      }
+      if (it.action === '__more-back__') {
+        showMoreIndex()
+        return
+      }
+      closeActionMenu()
+      api.action(it.action)
+    })
+    return btn
+  }
+
+  function showMainPage() {
+    menuPage = 'main'
+    actionMenu.classList.remove('page-more', 'page-more-group')
+    actionMenu.classList.add('page-main')
+    actionMenuTitle.textContent = '想让我做什么？'
+    actionMenuItems.innerHTML = ''
+    actionList().forEach((it, i) => actionMenuItems.appendChild(makeItem(it, i, true)))
+  }
+
+  // 更多页·目录：把每个分组做成一个彩色宫格块，和主菜单同一套视觉。
+  // 点某块进入 renderGroupPage 看该组内容；自检可直接喂假数据验证。
+  function renderMoreIndex(groups) {
+    moreGroups = groups || []
+    menuPage = 'more'
+    actionMenu.classList.remove('page-main', 'page-more-group')
+    actionMenu.classList.add('page-more')
+    actionMenuTitle.textContent = '更多设置'
+    actionMenuItems.innerHTML = ''
+    actionMenuItems.appendChild(makeItem({ action: '__back__', ico: '‹', txt: '返回', hint: '' }, 0))
+    moreGroups.forEach((g, gi) => {
+      const tile = document.createElement('button')
+      tile.type = 'button'
+      tile.className = 'action-item group-tile'
+      tile.style.setProperty('--i', gi + 1)
+      applyTint(tile, g.tint)
+      tile.setAttribute('role', 'menuitem')
+      const ico = document.createElement('span')
+      ico.className = 'ico'
+      ico.textContent = g.icon || '•'
+      const txt = document.createElement('span')
+      txt.className = 'txt'
+      txt.textContent = g.title || '其他'
+      tile.appendChild(ico)
+      tile.appendChild(txt)
+      tile.addEventListener('click', (ev) => {
+        ev.stopPropagation()
+        renderGroupPage(gi)
+      })
+      actionMenuItems.appendChild(tile)
+    })
+  }
+
+  // 更多页·组内：某个分组的具体项目，宫格排布。纯只读组用 2 列，其余 4 列。
+  function renderGroupPage(gi) {
+    const g = moreGroups[gi]
+    if (!g) return
+    menuPage = 'group'
+    actionMenu.classList.remove('page-main')
+    actionMenu.classList.add('page-more', 'page-more-group')
+    actionMenuTitle.textContent = g.title || '更多'
+    actionMenuItems.innerHTML = ''
+    actionMenuItems.appendChild(makeItem({ action: '__more-back__', ico: '‹', txt: '返回', hint: '' }, 0))
+    const infoGrid = (g.items || []).length > 0 && g.items.every((it) => it.readonly)
+    // 必须包在 .action-group.expanded 里：.action-group-body 默认 max-height:0/opacity:0，
+    // 少了这层容器内容会渲染但不可见（点进去像"没有下一级"）。
+    const wrap = document.createElement('div')
+    wrap.className = 'action-group expanded'
+    const body = document.createElement('div')
+    body.className = 'action-group-body grp-grid' + (infoGrid ? ' grp-info' : '')
+    ;(g.items || []).forEach((it, ii) => body.appendChild(makeItem(it, ii, true)))
+    wrap.appendChild(body)
+    actionMenuItems.appendChild(wrap)
+  }
+
+  // 从主菜单进入更多目录（异步取数据）；屏蔽 awaiting 期间已翻页/关闭的情况
+  async function showMorePage() {
+    menuPage = 'more'
+    actionMenuTitle.textContent = '更多设置'
+    let groups = []
+    try {
+      groups = (await api.menuData()) || []
+    } catch (e) {
+      groups = []
+    }
+    if (menuPage !== 'more') return
+    renderMoreIndex(groups)
+  }
+
+  // 已拿到数据时直接显示目录（组内点返回用，免得再异步取一次）
+  function showMoreIndex() {
+    renderMoreIndex(moreGroups)
+  }
+
+  function renderActionMenu() {
+    if (menuPage === 'more') showMorePage()
+    else if (menuPage === 'group') showMoreIndex()
+    else showMainPage()
+  }
+
+  function openActionMenu() {
+    if (menuOpen) return
+    menuOpen = true
+    hideBubble()
+    actionMenuItems.innerHTML = '' // 清掉上一次的（自检可能留过）
+    showMainPage()
+    document.body.classList.add('menu-open')
+    actionMenu.classList.add('show')
+    api.menuOpen()
+  }
+
+  function closeActionMenu() {
+    if (!menuOpen) return
+    menuOpen = false
+    actionMenu.classList.remove('show')
+    document.body.classList.remove('menu-open')
+    api.menuClose()
+  }
+
+  function toggleActionMenu() {
+    if (menuOpen) closeActionMenu()
+    else openActionMenu()
+  }
+
+  // 点菜单外收起：菜单打开时铺了全屏透明遮罩（#menu-scrim），
+  // 它盖住鱼身和窗口空白，左键点哪都能收到 → 关菜单。
+  const menuScrim = document.getElementById('menu-scrim')
+  if (menuScrim) {
+    menuScrim.addEventListener('pointerdown', (e) => {
+      if (e.button === 2) return // 右键交给下面的 contextmenu
+      closeActionMenu()
+    })
+    // 菜单开着时右键任意位置也收起（此时遮罩盖住 #hit，hit 的 contextmenu 收不到）
+    menuScrim.addEventListener('contextmenu', (e) => {
+      e.preventDefault()
+      closeActionMenu()
+    })
+  }
+  // window 兜底：点菜单里任何"非按钮"区域都要能关——宫格间隙、标题栏、items 容器空白
+  // 都属于 pointer-events:auto 的 .action-menu-items，会挡住下面的遮罩，
+  // 用 contains 判断会漏掉这些（之前点空白关不掉就是这个原因）。
+  // 只有真正点在实际按钮（.action-item / .group-tile）上才不关，交给按钮自己的 click。
+  window.addEventListener('pointerdown', (e) => {
+    if (e.button === 2) return
+    if (menuOpen && !e.target.closest('.action-item, .group-tile')) closeActionMenu()
+  })
+  window.addEventListener('keydown', (e) => {
+    if (menuOpen && e.key === 'Escape') closeActionMenu()
   })
 
   // 戳它一下播哪段：以前 5 段「点击回应」纯随机，跟心情、跟你俩熟不熟完全无关。
@@ -618,6 +913,8 @@
   }
 
   function land() {
+    // 弹弓模式：真窗落地后重新架好弹弓（收起飞行态、鱼位复位）
+    if (window.SlingshotGame && window.SlingshotGame.isOpen()) window.SlingshotGame.onLanded()
     const a = pool.fun.indexOf('原地重力下蹲压缩') >= 0 ? '原地重力下蹲压缩' : null
     play(a || pickWeighted(), { onEnd: () => nextIdle() })
     squish()
@@ -875,6 +1172,54 @@
     hideBubble()
     phase = 'idle'
     nextIdle()
+  })
+  // 主进程分发「玩弹弓」动作后发来：进入/退出弹弓发射器模式（toggle）。
+  // 弹射的是这只真桌宠窗口本身——不扩窗、不隐藏鱼，只叠一根弹弓 HUD。
+  api.on('pet:open-game', (d) => {
+    if (!window.SlingshotGame) return
+    try {
+      closeActionMenu()
+      const on = !d || d.on !== false
+      if (on) window.SlingshotGame.enter()
+      else window.SlingshotGame.close()
+    } catch (e) {
+      console.error('[pet] 切换弹弓模式失败：', e)
+    }
+  })
+  // 弹弓命中目标 / 全清：转给 SlingshotGame 播音效和提示
+  api.on('pet:target-hit', () => {
+    if (window.SlingshotGame && window.SlingshotGame.onTargetHit) window.SlingshotGame.onTargetHit()
+  })
+  api.on('sg:clear', () => {
+    if (window.SlingshotGame && window.SlingshotGame.onClear) window.SlingshotGame.onClear()
+  })
+  // 关卡信息（关卡号/弹药/得分）同步到桌宠 HUD
+  api.on('sg:level', (d) => {
+    if (window.SlingshotGame && window.SlingshotGame.onLevel) window.SlingshotGame.onLevel(d)
+  })
+  api.on('sg:fail', (d) => {
+    if (window.SlingshotGame && window.SlingshotGame.onFail) window.SlingshotGame.onFail(d)
+  })
+  api.on('sg:respawn', () => {
+    if (window.SlingshotGame && window.SlingshotGame.onRespawn) window.SlingshotGame.onRespawn()
+  })
+  // 全屏输入屏障接手的拖拽：坐标已换算成鱼窗口内，转给弹弓逻辑。
+  // 用屏障层接管是为了鼠标移出鱼窗口后事件不丢失、也不误触下层应用。
+  api.on('pet:barrier-down', (d) => {
+    if (window.SlingshotGame && window.SlingshotGame.isOpen()) {
+      window.SlingshotGame.beginDrag({ clientX: d.x, clientY: d.y })
+    }
+  })
+  api.on('pet:barrier-move', (d) => {
+    if (window.SlingshotGame && window.SlingshotGame.isOpen()) {
+      window.SlingshotGame.moveDrag({ clientX: d.x, clientY: d.y })
+    }
+  })
+  api.on('pet:barrier-up', (d) => {
+    if (window.SlingshotGame && window.SlingshotGame.isOpen()) {
+      const shot = window.SlingshotGame.releaseDrag()
+      if (shot && api.throw) api.throw(shot.vx, shot.vy)
+    }
   })
 
   function selftestReport(boot, extra) {
@@ -1223,6 +1568,126 @@
           lineCleared: !bubble.classList.contains('show'),
         }
         manualUntil = 0
+
+        // 自绘气泡菜单：主页面 8 项 + 翻页子页渲染 + 开关切换
+        let menuProbe
+        try {
+          const expected = ['chat', 'poke', 'rps', 'note', 'feed', 'speak', 'crawl', 'game', '__more__']
+          openActionMenu()
+          const opened = actionMenu.classList.contains('show') && document.body.classList.contains('menu-open')
+          const scrimOn = !!menuScrim && getComputedStyle(menuScrim).display === 'block' && getComputedStyle(menuScrim).pointerEvents === 'auto'
+          const items = Array.from(actionMenuItems.querySelectorAll('.action-item'))
+          const actions = items.map((b) => b.dataset.action)
+          const itemsOk = expected.every((a) => actions.includes(a)) && items.every((b) => !!b.dataset.action)
+          const titled = !!(actionMenuTitle && actionMenuTitle.textContent.trim())
+          // 每个功能自带图标 + 主题色：ico 有内容，按钮挂上 --tint/--tint-bg，且颜色不止一种
+          const tints = items.map((b) => (b.style.getPropertyValue('--tint') || '').trim())
+          const tintOk =
+            items.every((b) => {
+              const ico = b.querySelector('.ico')
+              return ico && ico.textContent.trim() && b.style.getPropertyValue('--tint-bg')
+            }) && new Set(tints.filter(Boolean)).size > 1
+          // 主页面应是宫格：page-main class + grid 布局 + 无 hint
+          const gridOk =
+            actionMenu.classList.contains('page-main') &&
+            getComputedStyle(actionMenuItems).display === 'grid' &&
+            !actionMenuItems.querySelector('.hint')
+          // 更多页·目录（喂假分组数据，纯渲染）：每个分组是一个彩色宫格块
+          renderMoreIndex([
+            { title: '它现在的状态', icon: '📊', tint: '#4c9e6a', layout: 'grid', items: [{ ico: '💞', tint: '#e0679a', txt: '亲密度 80%', readonly: true }, { ico: '🍚', tint: '#4c9e6a', txt: '饱腹度 72%', readonly: true }] },
+            { title: '设置', icon: '🎛️', tint: '#7d8a99', layout: 'grid', items: [{ ico: '🔊', tint: '#378add', txt: '提示音', action: 'sound' }, { ico: '🚪', tint: '#c0392b', txt: '退出', action: 'quit', danger: true }] },
+          ])
+          const tiles = Array.from(actionMenuItems.querySelectorAll('.group-tile'))
+          const indexGridOk = menuPage === 'more' &&
+            actionMenu.classList.contains('page-more') && !actionMenu.classList.contains('page-more-group') &&
+            getComputedStyle(actionMenuItems).display === 'grid' && tiles.length === 2
+          // 每个分组块带独立彩色图标（--tint）
+          const tileTintOk = tiles.length === 2 && tiles.every((t) => {
+            const ico = t.querySelector('.ico')
+            return ico && ico.textContent.trim() && t.style.getPropertyValue('--tint')
+          })
+          // 点第一个分组块 → 进入组内页（宫格内容）
+          if (tiles[0]) tiles[0].click()
+          const gridBody = actionMenuItems.querySelector('.action-group-body.grp-grid')
+          // 关键：不仅要 display:grid，还要真正可见（opacity=1 且 maxHeight 非 0），
+          // 否则内容渲染了却被折叠样式藏起来——就是"点进去没下一级"的 bug。
+          const bodyVisible = !!gridBody && (() => {
+            const cs = getComputedStyle(gridBody)
+            return cs.opacity === '1' && cs.maxHeight !== '0px' && cs.display === 'grid'
+          })()
+          const groupPageOk = menuPage === 'group' && actionMenu.classList.contains('page-more-group') && bodyVisible
+          // 纯只读组（状态）用 2 列
+          renderGroupPage(0)
+          const infoBody = actionMenuItems.querySelector('.action-group-body.grp-info')
+          const grpInfoOk = !!infoBody && getComputedStyle(infoBody).display === 'grid' &&
+            getComputedStyle(infoBody).gridTemplateColumns.split(' ').length === 2
+          // 功能组（非只读）用 3 列，且格子 min-width:0、文字换行——防止长文字撑宽导致出画
+          renderGroupPage(1)
+          const fitBody = actionMenuItems.querySelector('.action-group-body.grp-grid:not(.grp-info)')
+          const fitItems = Array.from(actionMenuItems.querySelectorAll('.action-group-body.grp-grid:not(.grp-info) .action-item'))
+          const gridFitOk = !!fitBody &&
+            getComputedStyle(fitBody).gridTemplateColumns.split(' ').length === 3 &&
+            fitItems.length > 0 && fitItems.every((it) => {
+              const cs = getComputedStyle(it)
+              const txt = it.querySelector('.txt')
+              return cs.minWidth === '0px' && !!txt && getComputedStyle(txt).whiteSpace === 'normal'
+            })
+          // 组内返回 → 回到目录
+          const backBtn = actionMenuItems.querySelector('[data-action="__more-back__"]')
+          if (backBtn) backBtn.click()
+          const backToIndexOk = menuPage === 'more' && actionMenuItems.querySelectorAll('.group-tile').length === 2
+          const moreOk = indexGridOk && tileTintOk && groupPageOk && grpInfoOk && gridFitOk && backToIndexOk
+          // 翻回主页面
+          showMainPage()
+          const backOk = actionMenuItems.querySelector('[data-action="__more__"]') != null
+          closeActionMenu()
+          const closed = !actionMenu.classList.contains('show') && !document.body.classList.contains('menu-open')
+          const scrimOff = !!menuScrim && getComputedStyle(menuScrim).display === 'none'
+          // 真实行为探针：右键开菜单后，左键点"菜单内非按钮区域"（标题栏/间隙）应能关闭。
+          // 之前 window 兜底用 actionMenu.contains 判断，点到菜单内的空白不关——这是用户报的 bug。
+          openActionMenu()
+          const beforeBlankClick = menuOpen
+          // 派发一个冒泡的 pointerdown，target 设为菜单标题（不是 .action-item）
+          if (actionMenuTitle) {
+            actionMenuTitle.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0 }))
+          }
+          const blankClickCloses = beforeBlankClick && !menuOpen
+          closeActionMenu()
+          menuProbe = {
+            rendered: items.length > 0,
+            opened,
+            closed,
+            scrimOk: scrimOn && scrimOff,
+            itemsOk,
+            titled,
+            tintOk,
+            gridOk,
+            moreOk,
+            indexGridOk,
+            tileTintOk,
+            groupPageOk,
+            grpInfoOk,
+            gridFitOk,
+            backToIndexOk,
+            blankClickCloses,
+            backOk,
+            count: items.length,
+          }
+        } catch (e) {
+          menuProbe = { error: String((e && e.message) || e) }
+        }
+
+        // 弹弓小游戏：纯逻辑探针（不真的开局，验证夹紧/反向弹射/抛物线/命中计分/布置）
+        let gameProbe
+        try {
+          gameProbe =
+            window.SlingshotGame && typeof window.SlingshotGame.probeLogic === 'function'
+              ? window.SlingshotGame.probeLogic()
+              : { error: 'slingshot 模块未加载' }
+        } catch (e) {
+          gameProbe = { error: String((e && e.message) || e) }
+        }
+
         const hr = hit.getBoundingClientRect()
         const hitInfo = {
           stage: getComputedStyle(stage).pointerEvents,
@@ -1268,6 +1733,8 @@
           chat: chatProbe,
           evolve: evolveProbe,
           crawl: crawlProbe,
+          actionMenu: menuProbe,
+          game: gameProbe,
         }
       } catch (e) {
         probe = { error: String((e && e.message) || e) }

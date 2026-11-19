@@ -7,6 +7,7 @@
       content="default-src 'none'; img-src pet: data:; media-src pet:; style-src 'self'; script-src 'self'"
     />
     <link rel="stylesheet" href="style.css" />
+    <link rel="stylesheet" href="slingshot.css" />
   </head>
   <body>
     <div id="bubble" class="bubble">
@@ -24,7 +25,13 @@
       <video id="v-b" class="pet" muted playsinline preload="auto"></video>
       <div id="hit"></div>
     </div>
+    <div id="menu-scrim" class="menu-scrim"></div>
+    <div id="action-menu" class="action-menu" role="menu" aria-label="桌宠动作菜单">
+      <div class="action-menu-title">想让我做什么？</div>
+      <div id="action-menu-items" class="action-menu-items"></div>
+    </div>
     <div id="food"></div>
+    <script src="slingshot.js"></script>
     <script src="app.js"></script>
   </body>
 </html>
