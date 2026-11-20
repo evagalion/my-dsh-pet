@@ -7,11 +7,11 @@
 // 自包含模块，挂到 window.SlingshotGame。
 ;(function () {
   const GRAVITY = 2600 // 与主进程 physics.js 保持一致（瞄准线用）
-  const POWER = 21 // 拉伸像素 → 初速度 px/s（加大，够打到上方罐子）
+  const POWER = 30 // 拉伸像素 → 初速度 px/s（21→30：满拉初速 1764→2520，射程明显变远）
   const MAX_PULL = 84 // 皮筋最大拉伸（四向都能拉满）
   const MIN_PULL = 16 // 小于此视为没拉
   // 弹射方向是拉伸的反方向：往下拉→向上弹。所以必须允许往下拉足够多，
-  // 否则只能往下弹。鱼贴底，下拉时脚会略微沉出窗口底，可以接受。
+  // 否则只能往下弹。往下拉的"力度"用完整 pull 算，不受视觉位移限制影响。
   const PULL_DOWN_CAP = 84
 
   let open = false
@@ -43,12 +43,20 @@
       { x: c.x + 18, y: c.y - 16 },
     ]
   }
-  // 鱼本体/皮兜只跟移一小段做视觉反馈，避免真拖 84px 时整条鱼沉出窗口底看不见；
-  // 弹射力度与瞄准方向仍用完整的 pull 计算。
+  // 鱼本体跟移做视觉反馈，但鱼贴在窗口底，往下沉会沉出窗口被裁掉（用户反馈"下拉看不到鱼"）。
+  // 所以竖直方向分两种：往上拉（pull.y<0，鱼将往上弹）跟移；往下拉则几乎不沉，
+  // 靠皮筋拉长 + 力度条表达蓄力。水平方向左右都跟移（窗口够宽，不会裁）。
+  // 注意：这里只影响"画出来鱼挪多少"，发射初速与瞄准始终用完整 pull，手感力度不受影响。
   const VISUAL_SCALE = 0.4
+  const DOWN_VISUAL_SCALE = 0.08 // 往下拉时鱼身只轻微下沉，避免沉出窗口底
+  function visualOffset() {
+    const sy = pull.y < 0 ? VISUAL_SCALE : DOWN_VISUAL_SCALE
+    return { x: pull.x * VISUAL_SCALE, y: pull.y * sy }
+  }
   function pouchPoint() {
     const c = restPoint()
-    return { x: c.x + pull.x * VISUAL_SCALE, y: c.y + pull.y * VISUAL_SCALE }
+    const v = visualOffset()
+    return { x: c.x + v.x, y: c.y + v.y }
   }
 
   function clampPull(x, y) {
@@ -117,12 +125,50 @@
       /* 静音 */
     }
   }
+  // 噪声发生器：撞击感的关键素材（纯振荡器音太"电子"，缺物理冲击）。
+  // 生成一段白噪声 buffer，可带 lowpass/bandpass 滤波，用来做"砰"和碎裂声。
+  function noise(dur, vol, filterType, filterFreq, delay) {
+    try {
+      if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)()
+      const n = Math.max(1, Math.floor(actx.sampleRate * dur))
+      const buf = actx.createBuffer(1, n, actx.sampleRate)
+      const data = buf.getChannelData(0)
+      for (let i = 0; i < n; i++) data[i] = Math.random() * 2 - 1
+      const src = actx.createBufferSource()
+      src.buffer = buf
+      const g = actx.createGain()
+      const t0 = actx.currentTime + (delay || 0)
+      g.gain.setValueAtTime(vol, t0)
+      g.gain.exponentialRampToValueAtTime(0.001, t0 + dur)
+      let node = src
+      if (filterType) {
+        const f = actx.createBiquadFilter()
+        f.type = filterType
+        f.frequency.value = filterFreq || 1000
+        src.connect(f)
+        node = f
+      }
+      node.connect(g)
+      g.connect(actx.destination)
+      src.start(t0)
+      src.stop(t0 + dur)
+    } catch (e) { /* 静音 */ }
+  }
   function sfxStretch() { beep(360, 0.07, 'sine', 0.04, 300) }
   function sfxLaunch() { beep(280, 0.18, 'triangle', 0.16, 620); setTimeout(() => beep(820, 0.1, 'sine', 0.1), 70) }
   function sfxLand() { beep(180, 0.16, 'sine', 0.12, 90) }
+  // 罐子击碎：三层叠加 = 低频"砰"(重量) + 碎裂噪声(陶瓷感) + 清脆尾音(爽感)
   function sfxTargetHit() {
-    beep(680, 0.09, 'square', 0.1, 980)
-    setTimeout(() => beep(1150, 0.12, 'sine', 0.09, 1400), 55)
+    beep(140, 0.2, 'sine', 0.28, 45)          // 低频撞击，快速下滑 = 沉甸甸的"砰"
+    noise(0.16, 0.22, 'lowpass', 1800)         // 宽带碎裂声
+    noise(0.1, 0.14, 'highpass', 3200, 0.02)   // 高频碎渣
+    setTimeout(() => beep(920, 0.14, 'triangle', 0.12, 1500), 45) // 清脆尾音
+  }
+  // 装甲罐受击：金属"铛"，不碎——中频金属音 + 短噪声 + 高频叮
+  function sfxArmorHit() {
+    beep(520, 0.16, 'square', 0.14, 300)
+    beep(780, 0.12, 'triangle', 0.1, 620)
+    noise(0.08, 0.12, 'bandpass', 2600)
   }
   function sfxClear() {
     ;[660, 880, 1046, 1320].forEach((f, i) => setTimeout(() => beep(f, 0.16, 'sine', 0.1), i * 110))
@@ -138,17 +184,14 @@
     root.id = 'slingshot-hud'
     root.innerHTML =
       '<canvas id="sg-canvas"></canvas>' +
-      '<div class="sg-hint" id="sg-hint"><span class="sg-hint-text">🎯 弹弓模式 · 按住往后拉，松手弹飞</span>' +
-      '<button class="sg-exit" id="sg-exit" type="button">结束 ✕</button></div>' +
+      // 鱼窗口弹弓期间鼠标穿透（屏障层接管鼠标），这里的✕按钮点不到，已移除。
+      // 真正可点的"结束游戏"由屏障层(targets.js)渲染，并定位到鱼头顶上方。
+      '<div class="sg-hint" id="sg-hint"><span class="sg-hint-text">🎯 弹弓模式 · 往后拉松手弹飞 · 点头顶「结束游戏」退出</span></div>' +
       '<div class="sg-count" id="sg-count"></div>'
     document.body.appendChild(root)
     canvas = document.getElementById('sg-canvas')
     ctx = canvas.getContext('2d')
     resize()
-    document.getElementById('sg-exit').addEventListener('click', (e) => {
-      e.stopPropagation()
-      close()
-    })
     window.addEventListener('resize', resize)
   }
 
@@ -211,7 +254,8 @@
   function applyFishOffset() {
     const stage = document.getElementById('stage')
     if (!stage) return
-    stage.style.transform = 'translate(' + (pull.x * VISUAL_SCALE).toFixed(1) + 'px,' + (pull.y * VISUAL_SCALE).toFixed(1) + 'px)'
+    const v = visualOffset()
+    stage.style.transform = 'translate(' + v.x.toFixed(1) + 'px,' + v.y.toFixed(1) + 'px)'
   }
   function resetFishOffset() {
     const stage = document.getElementById('stage')
@@ -360,6 +404,12 @@
     sfxTargetHit()
     setHint('💥 命中！继续弹我')
   }
+  // 装甲罐受击（只掉一层血、没碎）：金属铛音，提示要再打一次
+  function onArmorHit() {
+    if (!open) return
+    sfxArmorHit()
+    setHint('🛡 装甲罐！再来一发')
+  }
   function onClear() {
     if (!open) return
     sfxClear()
@@ -406,9 +456,15 @@
     const traj = computeTrajectory(-c.x * POWER, -c.y * POWER)
     const trajOk = traj.length >= 20 && traj[traj.length - 1].x > traj[0].x + 200
     const setupOk = MAX_PULL > MIN_PULL && POWER > 0 && GRAVITY > 0
+    // 下拉不裁鱼：满下拉（+MAX_PULL）时鱼身视觉下沉很小，不会沉出窗口底
+    const savedPull = pull
+    pull = { x: 0, y: MAX_PULL }
+    const downOffset = visualOffset()
+    pull = savedPull
+    const visualDownOk = downOffset.y > 0 && downOffset.y < 12 // 84*0.08≈6.7px，远小于旧值 34px
     // 关卡 HUD 回调就位（关卡/失败/重来）
     const levelHudOk = typeof onLevel === 'function' && typeof onFail === 'function' && typeof onRespawn === 'function'
-    return { clampOk, dirOk, arcOk, trajOk, trajDots: traj.length, setupOk, levelHudOk, maxPull: MAX_PULL, power: POWER }
+    return { clampOk, dirOk, arcOk, trajOk, trajDots: traj.length, setupOk, levelHudOk, visualDownOk, maxPull: MAX_PULL, power: POWER }
   }
 
   window.SlingshotGame = {
@@ -421,6 +477,7 @@
     releaseDrag,
     onLanded,
     onTargetHit,
+    onArmorHit,
     onClear,
     onLevel,
     onFail,

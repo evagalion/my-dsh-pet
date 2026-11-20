@@ -63,19 +63,23 @@ html, body {
   font-weight: 600;
   color: #5b6b7b;
 }
-/* 结束游戏按钮：屏障层接收鼠标，这里可点 */
+/* 结束游戏按钮：屏障层接收鼠标，这里可点。
+   位置由 targets.js 按鱼头顶坐标动态设置 left/top（鱼窗口鼠标穿透，HUD 里的✕点不到）。
+   left/top 未设置前的兜底：右上角。 */
 .t-quit {
   position: absolute;
   top: 14px;
   right: 18px;
   border: none;
   border-radius: 12px;
-  padding: 7px 15px;
-  background: rgba(224, 103, 154, 0.92);
+  padding: 6px 13px;
+  background: rgba(224, 103, 154, 0.94);
   color: #fff;
-  font: 600 13px/1.3 -apple-system, "PingFang SC", sans-serif;
-  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.14);
+  font: 600 12px/1.3 -apple-system, "PingFang SC", sans-serif;
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.18);
   cursor: pointer;
   pointer-events: auto;
+  white-space: nowrap;
+  z-index: 5;
 }
 .t-quit:hover { background: #c95585; }

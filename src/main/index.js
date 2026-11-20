@@ -275,6 +275,7 @@ function startFlight(vx, vy) {
   if (slingshotMode && !sgTransition) {
     sgAmmo = Math.max(0, sgAmmo - 1)
     sendAmmo()
+    sgShotHits = 0 // 新的一发，重置本发命中计数（每发上限）
   }
   const b = win.getBounds()
   flight = createFlight(b.x, b.y, vx, vy)
@@ -288,6 +289,7 @@ function startFlight(vx, vy) {
   }
   stopFlightTimerOnly()
   let prev = Date.now()
+  let prevFishCx = null, prevFishCy = null // 上一帧鱼身中心，用于扫掠式碰撞（力度加大后防隧穿）
   flightTimer = setInterval(() => {
     if (!win || win.isDestroyed()) {
       stopFlightTimerOnly()
@@ -301,11 +303,14 @@ function startFlight(vx, vy) {
       // 既够得到高处罐塔，又不会飞出屏幕被系统钳制卡在顶部。
       step(flight, dt, bounds)
       win.setPosition(Math.round(flight.x), Math.round(flight.y))
-      // 弹弓模式：鱼中心（贴底，取偏下位置）命中目标检测
+      // 弹弓模式：鱼中心（贴底，取偏下位置）命中目标检测。
+      // 传上一帧中心做扫掠判定——力度加大后单帧可移动 40px+，只看当前点会漏撞。
       if (slingshotMode) {
         const fishCx = flight.x + b.width / 2
         const fishCy = flight.y + b.height * 0.68
-        checkTargetHits(fishCx, fishCy)
+        checkTargetHits(fishCx, fishCy, prevFishCx, prevFishCy)
+        prevFishCx = fishCx
+        prevFishCy = fishCy
       }
     } catch (e) {
       stopFlightTimerOnly()
@@ -910,6 +915,7 @@ let sgScore = 0
 let targetSeq = 0
 let sgAnimTimer = null   // 移动靶动画定时器
 let sgAnimT0 = 0         // 动画起始时间
+let sgShotHits = 0       // 本发已命中罐子数（每发上限，替代时间冷却）
 
 // ---- 关卡系统 ----
 // 每关一个格子图案：'#' 普通罐 / '@' 装甲罐(要打 2 次) / ' ' 空位。
@@ -929,6 +935,14 @@ let sgCycle = 0      // 已通关轮数，每轮目标更小、弹药更紧、�
 // 命中判定留白：配合拉大的目标间距，让判定框彼此不重叠——一发只能打一个，
 // 想连击必须靠精准穿过缝隙。之前 +24 时判定框比间距还大，飞一排必中一片。
 const SG_HIT_PAD = 8
+// 鱼身是有体积的（窗口内鱼身约 108×135px），碰撞不能再用"中心一个点"去撞。
+// 否则鱼身边缘明明压到罐子了，中心点还差着 50~70px，判定不过——就是"看着碰到没碎"。
+// 用贴合鱼身的矩形做"矩形-圆相交"判定：鱼身边缘碰到罐子圆即命中。
+// 半宽/半高按真实鱼身包围盒取（素材 640×360 里鱼 x211~426/y61~330，缩放到 320×280 贴底）。
+// 之前 46×52 偏小，鱼头/鱼尾擦到罐子时判定框还没到，导致"有的罐子看着碰到却没碎"。
+const SG_FISH_HW = 56  // 鱼身碰撞半宽（真实约54，取56贴合）
+const SG_FISH_HH = 68  // 鱼身碰撞半高（真实约67，取68贴合）
+const SG_SHOT_HIT_CAP = 3 // 每发最多碎 3 个罐：保证连击手感，又不至于一发清空整塔
 
 // 弹弓模式物理顶边上移量：让鱼能飞到屏幕上方一点去够高处罐塔，
 // 但仍保留反弹（窗口不会被 macOS 钳制在屏幕边缘卡死）。
@@ -1045,6 +1059,7 @@ function makeTargets(launch, area, level) {
         r,
         pts: 1 + (rows.length - 1 - row) + (armor ? 2 : 0), // 越高越值钱，装甲额外加分
         hp: armor ? 2 : 1,
+        maxHp: armor ? 2 : 1, // 目标层据此画护盾环/裂纹，缺失会让装甲罐被当成普通罐
         alive: true,
       })
     }
@@ -1119,6 +1134,7 @@ function sendTargets() {
     r: t.r,
     pts: t.pts,
     hp: t.hp,
+    maxHp: t.maxHp,
     alive: t.alive,
   }))
   targetWin.webContents.send('sg:init', {
@@ -1131,6 +1147,11 @@ function sendTargets() {
     ammo: sgAmmo,
     cycle: spec.cycle,
     moving: spec.moving,
+    // 鱼窗口鼠标穿透后，鱼头 HUD 上的"结束✕"点不到，把可点的结束按钮交给
+    // 屏障层渲染，并告诉它鱼头顶在哪（发射台左上 + 半宽，转目标层相对坐标）。
+    quitBtn: sgLaunch
+      ? { x: Math.round(sgLaunch.x + sgLaunch.w / 2 - sgArea.x), y: Math.round(sgLaunch.y - sgArea.y - 12) }
+      : null,
   })
   // 同步关卡信息给桌宠 HUD
   if (win && !win.isDestroyed()) {
@@ -1149,24 +1170,62 @@ function sendAmmo() {
   })
 }
 
-// 鱼飞行每帧调用：鱼窗口中心是否撞到活目标
-function checkTargetHits(fishX, fishY) {
+// 鱼身(矩形 AABB) 与罐子(圆) 是否相交——纯函数，供判定与自检共用。
+// 取鱼身矩形到罐子圆心的最近距离，小于等效半径即命中。用整条鱼的身体去撞，
+// 而不是拿中心一个点；这样鱼身边缘压到罐子就算数，符合你眼睛看到的接触。
+function fishBodyHitsTarget(fishX, fishY, t) {
+  const dx = Math.max(Math.abs(fishX - t.x) - SG_FISH_HW, 0)
+  const dy = Math.max(Math.abs(fishY - t.y) - SG_FISH_HH, 0)
+  const reach = t.r + SG_HIT_PAD
+  return dx * dx + dy * dy < reach * reach
+}
+
+// 扫掠判定：沿"上一帧中心 → 当前帧中心"的线段密集采样，任一采样点鱼身碰到罐子即命中。
+// 力度加大后单帧可移动 40px+，只看当前一个点会隧穿漏撞（"明明穿过却没碎"）。
+// 采样步长 10px，远小于鱼身判定框，密集到不会漏。prev 为空（首帧）时退化为单点判定。
+function fishSweepHitsTarget(fishX, fishY, prevX, prevY, t) {
+  if (prevX == null || prevY == null) return fishBodyHitsTarget(fishX, fishY, t)
+  const dist = Math.hypot(fishX - prevX, fishY - prevY)
+  const steps = Math.max(1, Math.ceil(dist / 10))
+  for (let i = 0; i <= steps; i++) {
+    const k = i / steps
+    const sx = prevX + (fishX - prevX) * k
+    const sy = prevY + (fishY - prevY) * k
+    if (fishBodyHitsTarget(sx, sy, t)) return true
+  }
+  return false
+}
+
+// 鱼飞行每帧调用：鱼身矩形是否撞到活目标圆。
+// fishX/fishY 是鱼身中心（flight 左上角 + 半宽/0.68 高），与瞄准弹道同一基准。
+function checkTargetHits(fishX, fishY, prevX, prevY) {
   if (!slingshotMode || !sgTargets.length) return
+  // 每发命中上限：不再用时间冷却（力度加大后一发穿塔很快，时间冷却会让接连
+  // 碰到的罐子被忽略=看着碰到没碎）。改成按"本发已碎个数"限制，碎够上限这发
+  // 就不再计数——既保证每个明显接触都碎，又不会一发横扫整塔。
+  if (sgShotHits >= SG_SHOT_HIT_CAP) return
+  // 撞击方向（鱼当前速度归一化）：给目标层做方向性碎片飞溅，碎片顺着鱼撞过去的方向喷。
+  let dirX = 1, dirY = -0.4
+  if (flight && (flight.vx || flight.vy)) {
+    const sp = Math.hypot(flight.vx, flight.vy) || 1
+    dirX = flight.vx / sp
+    dirY = flight.vy / sp
+  }
   for (const t of sgTargets) {
     if (!t.alive) continue
-    // 收紧判定：间距已按 2*(r+PAD)+余量 排布，判定框不再重叠，一发基本只打一个。
-    if (Math.abs(fishX - t.x) < t.r + SG_HIT_PAD && Math.abs(fishY - t.y) < t.r + SG_HIT_PAD) {
+    if (fishSweepHitsTarget(fishX, fishY, prevX, prevY, t)) {
+      sgShotHits += 1
       // 装甲罐：第一发只掉血、不消失，给受击反馈；第二发才碎
       if (t.hp > 1) {
         t.hp -= 1
-        const crack = { id: t.id, x: t.x - sgArea.x, y: t.y - sgArea.y, hp: t.hp, cracked: true }
+        const crack = { id: t.id, x: t.x - sgArea.x, y: t.y - sgArea.y, hp: t.hp, cracked: true, dirX, dirY }
         if (targetWin && !targetWin.isDestroyed()) targetWin.webContents.send('sg:hit', crack)
-        if (win && !win.isDestroyed()) win.webContents.send('pet:target-hit')
+        if (win && !win.isDestroyed()) win.webContents.send('pet:armor-hit')
         break
       }
       t.alive = false
       sgScore += t.pts * 10
-      const d = { id: t.id, x: t.x - sgArea.x, y: t.y - sgArea.y, pts: t.pts * 10, score: sgScore, hp: 0 }
+      const d = { id: t.id, x: t.x - sgArea.x, y: t.y - sgArea.y, pts: t.pts * 10, score: sgScore, hp: 0, dirX, dirY }
       if (targetWin && !targetWin.isDestroyed()) targetWin.webContents.send('sg:hit', d)
       if (win && !win.isDestroyed()) {
         win.webContents.send('sg:score', { score: sgScore, x: t.x, y: t.y, pts: t.pts * 10 })
@@ -1875,6 +1934,43 @@ app.whenReady().then(() => {
             typeof slingshotMode === 'boolean' &&
             GAME_W > 0 &&
             GAME_H > 0,
+          // 鱼身体积碰撞判定：鱼身边缘压到罐子就命中（点判定会漏的场景），远处不误判
+          hitBodyOk: (() => {
+            try {
+              const t = { x: 500, y: 300, r: 23 }
+              // 鱼中心在罐子正左方 (HW + r + PAD - 4)：鱼身右边缘已压进罐子 4px，
+              // 旧的"点到圆心 < r+PAD"判定此时距离 46+23+8-4=73 > 31 会漏，新判定必须命中。
+              const edgeX = t.x - (SG_FISH_HW + t.r + SG_HIT_PAD - 4)
+              const edgeHit = fishBodyHitsTarget(edgeX, t.y, t)
+              // 竖直方向同理：鱼身下边缘刚压到罐子上沿
+              const edgeY = t.y - (SG_FISH_HH + t.r + SG_HIT_PAD - 4)
+              const edgeHitY = fishBodyHitsTarget(t.x, edgeY, t)
+              // 远处（中心距远超鱼身+罐子半径）必须不命中
+              const farMiss = !fishBodyHitsTarget(t.x - 300, t.y, t)
+              // 正中心必命中
+              const centerHit = fishBodyHitsTarget(t.x, t.y, t)
+              // 冷却常量就位，防止一次穿越横扫整塔
+              return edgeHit && edgeHitY && farMiss && centerHit && SG_SHOT_HIT_CAP > 0 && SG_FISH_HW > 0
+            } catch (e) {
+              return false
+            }
+          })(),
+          // 扫掠判定：高速跨过罐子（起止点都不碰、但路径穿过）必须命中，防力度加大后隧穿
+          sweepOk: (() => {
+            try {
+              const t = { x: 500, y: 300, r: 23 }
+              // 起点在罐子左侧很远、终点在右侧很远，两点都不碰，但水平线段正好穿过罐心
+              const fromX = 500 - (SG_FISH_HW + 60), toX = 500 + (SG_FISH_HW + 60)
+              const pointMiss = !fishBodyHitsTarget(fromX, 300, t) && !fishBodyHitsTarget(toX, 300, t)
+              const sweepHit = fishSweepHitsTarget(toX, 300, fromX, 300, t)
+              // 首帧无 prev 时退化为单点判定，仍应工作
+              const noPrevOk = fishSweepHitsTarget(t.x, t.y, null, null, t)
+              // 力度值在渲染层 probe.game.power 验证，这里只验证扫掠几何本身
+              return pointMiss && sweepHit && noPrevOk
+            } catch (e) {
+              return false
+            }
+          })(),
           // 目标系统：窗口/生成/碰撞/渲染函数就位 + 第 1 关目标数据合理
           sgTargetOk: (() => {
             try {

@@ -49,6 +49,7 @@ contextBridge.exposeInMainWorld('petAPI', {
       'pet:reload-config',
       'pet:open-game',
       'pet:target-hit',
+      'pet:armor-hit',
       'sg:score',
       'sg:clear',
       'sg:level',

@@ -1190,6 +1190,9 @@
   api.on('pet:target-hit', () => {
     if (window.SlingshotGame && window.SlingshotGame.onTargetHit) window.SlingshotGame.onTargetHit()
   })
+  api.on('pet:armor-hit', () => {
+    if (window.SlingshotGame && window.SlingshotGame.onArmorHit) window.SlingshotGame.onArmorHit()
+  })
   api.on('sg:clear', () => {
     if (window.SlingshotGame && window.SlingshotGame.onClear) window.SlingshotGame.onClear()
   })
