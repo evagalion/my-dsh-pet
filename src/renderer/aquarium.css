@@ -1,0 +1,130 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.tank {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 100%;
+  overflow: hidden;
+  border-radius: 16px 16px 0 0;
+  background: linear-gradient(180deg, rgba(120, 200, 230, 0.12), rgba(40, 120, 170, 0.30));
+  border-top: 2px solid rgba(255, 255, 255, 0.35);
+}
+.water {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    repeating-linear-gradient(90deg, rgba(255,255,255,0.04) 0 2px, transparent 2px 18px);
+  animation: sway 6s ease-in-out infinite alternate;
+}
+@keyframes sway { from { transform: translateX(-6px); } to { transform: translateX(6px); } }
+.bubbles { position: absolute; inset: 0; pointer-events: none; }
+.bubble {
+  position: absolute;
+  bottom: -20px;
+  border-radius: 50%;
+  border: 1px solid rgba(255,255,255,0.55);
+  background: rgba(255,255,255,0.12);
+  animation: rise linear infinite;
+}
+@keyframes rise {
+  0% { transform: translateY(0) translateX(0); opacity: 0; }
+  10% { opacity: 0.8; }
+  100% { transform: translateY(-260px) translateX(14px); opacity: 0; }
+}
+.fish-layer { position: absolute; inset: 0; pointer-events: none; }
+.afish {
+  position: absolute;
+  font-size: 34px;
+  line-height: 1;
+  will-change: transform;
+  filter: drop-shadow(0 2px 3px rgba(0,0,0,0.12));
+}
+.food-layer { position: absolute; inset: 0; pointer-events: none; }
+.crumb {
+  position: absolute;
+  width: 5px; height: 5px; border-radius: 50%;
+  background: #e8b24a;
+  animation: sink 2.6s linear forwards;
+}
+@keyframes sink {
+  0% { transform: translateY(-10px); opacity: 1; }
+  100% { transform: translateY(150px); opacity: 0; }
+}
+.hud {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 8px 6px 14px;
+  border-radius: 14px;
+  background: rgba(255, 253, 247, 0.93);
+  box-shadow: 0 3px 12px rgba(0,0,0,0.12);
+  font: 500 12px/1.3 -apple-system, "PingFang SC", sans-serif;
+  color: #3a3944;
+  white-space: nowrap;
+}
+.hud .brand { color: #2a7fb5; font-weight: 500; }
+.hud b { font-weight: 500; }
+.hud .coin b { color: #b8860b; }
+.hud .growth b { color: #2a9d8f; }
+.hud .lv b { color: #7b6cd4; }
+.btn {
+  border: none;
+  border-radius: 10px;
+  padding: 5px 11px;
+  background: #eef2f6;
+  color: #3a3944;
+  font-size: 12px;
+  cursor: pointer;
+}
+.btn:hover { background: #e0e7ef; }
+.btn.feed { background: #e8b24a; color: #fff; }
+.btn.feed:hover { background: #d49f38; }
+.btn.feed:disabled { background: #d9d4c8; color: #9a958a; cursor: default; }
+.btn.x { background: transparent; color: #9a9aa8; padding: 5px 8px; }
+.shop {
+  position: absolute;
+  top: 54px;
+  left: 50%;
+  transform: translateX(-50%) translateY(-8px);
+  display: none;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 14px;
+  background: rgba(255, 253, 247, 0.97);
+  box-shadow: 0 6px 20px rgba(0,0,0,0.16);
+  max-width: 92%;
+}
+.shop.show { display: flex; flex-wrap: wrap; justify-content: center; animation: shopIn 0.2s ease-out; }
+@keyframes shopIn { from { opacity: 0; transform: translateX(-50%) translateY(-14px); } to { opacity: 1; transform: translateX(-50%) translateY(-8px); } }
+.shop-item {
+  width: 92px;
+  padding: 8px 6px;
+  border-radius: 10px;
+  background: #f6f4ee;
+  border: 1px solid #eae6dc;
+  text-align: center;
+  cursor: pointer;
+}
+.shop-item:hover { background: #efede5; }
+.shop-item.owned { opacity: 0.65; cursor: default; }
+.shop-item .em { font-size: 24px; }
+.shop-item .nm { font-size: 11px; color: #3a3944; margin-top: 2px; }
+.shop-item .pr { font-size: 10px; color: #b8860b; margin-top: 2px; }
+.shop-item .pr.owned-tag { color: #2a9d8f; }
+.shop-foot { width: 100%; text-align: center; font-size: 10px; color: #9a9aa8; margin-top: 2px; }
+.shop-foot button { border: none; background: #7b6cd4; color: #fff; border-radius: 8px; padding: 4px 10px; font-size: 11px; cursor: pointer; }
+.shop-foot button:disabled { background: #c9c4d8; cursor: default; }

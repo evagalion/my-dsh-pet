@@ -32,6 +32,9 @@ function loadConfig() {
       cfg.sound.click.enabled = raw.sound.click.enabled
     }
     if (raw.crawler && typeof raw.crawler.on === 'boolean') cfg.crawler.on = raw.crawler.on
+    // 嘴欠 / 听歌伴舞开关
+    if (raw.snark && typeof raw.snark.enabled === 'boolean') cfg.snark.enabled = raw.snark.enabled
+    if (raw.music && typeof raw.music.enabled === 'boolean') cfg.music.enabled = raw.music.enabled
   } catch {
     /* 第一次跑，用默认值 */
   }
@@ -50,6 +53,8 @@ function saveConfig(cfg) {
         click: { enabled: !!(cfg.sound && cfg.sound.click && cfg.sound.click.enabled !== false) },
       },
       crawler: { on: !!(cfg.crawler && cfg.crawler.on) },
+      snark: { enabled: !!(cfg.snark && cfg.snark.enabled !== false) },
+      music: { enabled: !!(cfg.music && cfg.music.enabled !== false) },
     }
     fs.writeFileSync(userConfigPath(), JSON.stringify(slim, null, 2), 'utf8')
   } catch (e) {

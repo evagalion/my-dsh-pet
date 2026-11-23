@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src pet: data:; media-src pet:; style-src 'self'; script-src 'self'" />
+    <link rel="stylesheet" href="aquarium.css" />
+  </head>
+  <body>
+    <div class="tank" id="tank">
+      <div class="water"></div>
+      <div class="bubbles" id="bubbles"></div>
+      <div class="fish-layer" id="fish-layer"></div>
+      <div class="food-layer" id="food-layer"></div>
+      <div class="hud" id="hud">
+        <span class="brand">🐳 大肥鱼水族馆</span>
+        <span class="coin">🪙 <b id="aq-coins">0</b></span>
+        <span class="growth">成长 <b id="aq-growth">0</b>%</span>
+        <span class="lv">Lv.<b id="aq-level">1</b></span>
+        <button id="aq-feed" class="btn feed" type="button">撒鱼食</button>
+        <button id="aq-shop-btn" class="btn" type="button">鱼店</button>
+        <button id="aq-close" class="btn x" type="button">✕</button>
+      </div>
+      <div class="shop" id="shop"></div>
+    </div>
+    <script src="aquarium.js"></script>
+  </body>
+</html>

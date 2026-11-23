@@ -67,6 +67,8 @@ contextBridge.exposeInMainWorld('petAPI', {
       'pet:barrier-down',
       'pet:barrier-move',
       'pet:barrier-up',
+      'pet:snark',
+      'pet:music',
     ]
     if (!valid.includes(channel)) return
     ipcRenderer.on(channel, (_e, payload) => fn(payload))

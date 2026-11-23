@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src pet: data:; media-src pet:; style-src 'self'; script-src 'self'" />
+    <link rel="stylesheet" href="clones.css" />
+  </head>
+  <body>
+    <div id="world"></div>
+
+    <!-- 游戏 HUD：得分 / 连击 / 倒计时 / 目标进度 -->
+    <div class="clone-hud" id="clone-hud">
+      <div class="hud-block"><span class="hud-label">🎯 得分</span><b id="hud-score">0</b></div>
+      <div class="hud-block"><span class="hud-label">🔥 连击</span><b id="hud-combo">—</b></div>
+      <div class="hud-block"><span class="hud-label">⏱ 剩余</span><b id="hud-time">45s</b></div>
+      <div class="hud-progress"><div id="hud-progress-fill"></div></div>
+      <button id="clone-quit" type="button">收工 ✕</button>
+    </div>
+
+    <!-- 开场面板 -->
+    <div class="game-panel show" id="start-panel">
+      <div class="panel-card">
+        <div class="panel-emoji">🐟✨</div>
+        <h1>分身大乱斗</h1>
+        <h2>限时抓鱼挑战</h2>
+        <p class="panel-desc">45 秒内点中尽量多的小鱼！<br />连续快速点中触发 <b>连击加成</b>，最高 5 倍得分。</p>
+        <div class="panel-rules">
+          <span>🎯 目标 <b id="rule-target">300</b> 分</span>
+          <span>🔥 连击越高分越多</span>
+        </div>
+        <button class="panel-btn primary" id="start-btn" type="button">开始挑战 ➜</button>
+        <button class="panel-quit" type="button">收工退出</button>
+      </div>
+    </div>
+
+    <!-- 结算面板 -->
+    <div class="game-panel" id="over-panel">
+      <div class="panel-card">
+        <div class="panel-emoji" id="over-emoji">🏆</div>
+        <h1 id="over-title">大获全胜！</h1>
+        <div class="over-score"><b id="over-score">0</b><span>分</span></div>
+        <div class="over-stats" id="over-stats"></div>
+        <button class="panel-btn primary" id="again-btn" type="button">再来一局 ↻</button>
+        <button class="panel-quit" type="button">收工退出</button>
+      </div>
+    </div>
+
+    <script src="clones.js"></script>
+  </body>
+</html>

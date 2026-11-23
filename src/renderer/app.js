@@ -347,7 +347,13 @@
     // 便签样式是"一次性"的：这次显示完（含被下一次普通气泡打断）就恢复成普通气泡
     bubble.classList.toggle('note', !!s.note)
     bubble.classList.toggle('evolve', !!s.evolve)
-    if (s.note) noteTag.textContent = s.note === true ? '小纸条' : s.note
+    bubble.classList.toggle('snark', !!s.snark)
+    bubble.classList.toggle('music', !!s.music)
+    // 四种特殊气泡共用一个角标位，谁触发就显示谁的标记
+    const tagText = s.note
+      ? (s.note === true ? '小纸条' : s.note)
+      : s.snark ? '毒舌' : s.music ? '♪ 听歌中' : ''
+    noteTag.textContent = tagText
     bubble.classList.add('show')
     if (ms > 0) bubbleTimer = setTimeout(hideBubble, ms)
   }
@@ -630,24 +636,23 @@
   let animLibGroups = [] // 缓存动作库分类数据
   let groupBackSource = 'more' // 当前组内页从哪个目录进来：'more' | 'animlib'
 
-  // 主页面动作清单。每项自带 icon（emoji）+ 主题色（ico/tint），特殊动作 __more__/__back__ 只翻页。
+  // 主页面动作清单。按「相似功能放一起」的顺序排 4 行 × 3 列，常用的提上来：
+  //   行1 陪它玩：聊聊天 / 摸一下 / 喂一口
+  //   行2 交流表达：在干嘛 / 递纸条 / 斗张图
+  //   行3 玩法：猜个拳 / 玩弹弓 / 桌面巡游
+  //   行4 整活大功能：分身大乱斗 / 水族馆 / 更多
+  // 分身、水族馆原藏二级「整活」，用户找不到 → 提到一级；哄睡觉移到二级「歇会儿」，
+  // 不再和二级重复。每项自带 icon（emoji）+ 主题色，特殊动作 __more__ 只翻页。
   function actionList() {
     const c = cfg || {}
     const list = [
       { action: 'chat', ico: '💬', tint: '#378add', txt: '聊聊天', hint: '打开对话', enabled: true },
       { action: 'poke', ico: '🤚', tint: '#e0679a', txt: '摸一下', hint: '', enabled: true },
-      { action: 'rps', ico: '✊', tint: '#e08a3c', txt: '猜个拳', hint: '石头剪刀布', enabled: (c.rps || {}).enabled !== false },
-      { action: 'note', ico: '📝', tint: '#b8860b', txt: '递纸条', hint: '', enabled: (c.note || {}).enabled !== false },
       { action: 'feed', ico: '🍚', tint: '#4c9e6a', txt: '喂一口', hint: '偶尔有惊喜', enabled: c.feed && c.feed.enabled !== false },
       { action: 'speak', ico: '💭', tint: '#7b6cd4', txt: '在干嘛', hint: '', enabled: true },
-      {
-        action: 'crawl',
-        ico: '🐾',
-        tint: '#2a9d8f',
-        txt: document.body.classList.contains('crawling') ? '停巡游' : '桌面巡游',
-        hint: '',
-        enabled: (c.crawler || {}).enabled !== false,
-      },
+      { action: 'note', ico: '📝', tint: '#b8860b', txt: '递纸条', hint: '', enabled: (c.note || {}).enabled !== false },
+      { action: 'meme', ico: '🖼️', tint: '#e0679a', txt: '斗张图', hint: '', enabled: true },
+      { action: 'rps', ico: '✊', tint: '#e08a3c', txt: '猜个拳', hint: '石头剪刀布', enabled: (c.rps || {}).enabled !== false },
       {
         action: 'game',
         ico: '🎯',
@@ -656,16 +661,16 @@
         hint: document.body.classList.contains('slingshot-mode') ? '退出发射器' : '弹射我自己',
         enabled: true,
       },
-      // 新素材玩法，放第一屏显眼位置，不再藏进三级菜单
       {
-        action: 'sleep',
-        ico: sleeping ? '🌅' : '😴',
-        tint: '#7b6cd4',
-        txt: sleeping ? '叫醒它' : '哄睡觉',
+        action: 'crawl',
+        ico: '🐾',
+        tint: '#2a9d8f',
+        txt: document.body.classList.contains('crawling') ? '停巡游' : '桌面巡游',
         hint: '',
-        enabled: true,
+        enabled: (c.crawler || {}).enabled !== false,
       },
-      { action: 'meme', ico: '🖼️', tint: '#e0679a', txt: '斗张图', hint: '', enabled: true },
+      { action: 'clones', ico: '🐟', tint: '#7b6cd4', txt: '分身大乱斗', hint: '限时抓鱼', enabled: true },
+      { action: 'aquarium', ico: '🪸', tint: '#2a9d8f', txt: '水族馆', hint: '养鱼', enabled: true },
       { action: '__more__', ico: '⚙️', tint: '#7d8a99', txt: '更多', hint: '状态 / 设置 / 退出', enabled: true },
     ]
     return list.filter((x) => x.enabled)
@@ -1292,6 +1297,33 @@
     showBubble(d.line || '…', null, 6500)
   }
   api.on('pet:chat', onChat)
+  // 毒舌实时吐槽：它主动挑刺，压住状态机播一段 + 冒一句，气泡挂"毒舌"红标。
+  // holdMs 由主进程给，吐槽场景不同留的时间也不同（深夜/加班留久点）
+  function onSnark(d) {
+    if (!d) return
+    const hold = d.holdMs || 5600
+    manualUntil = Date.now() + hold
+    phase = 'idle'
+    clearTimeout(phaseTimer)
+    clearRotate()
+    if (d.anim) play(d.anim, { onEnd: () => nextIdle() })
+    squish()
+    showBubble(d.line || '哼。', { snark: true }, hold)
+  }
+  api.on('pet:snark', onSnark)
+  // 听歌一起蹦：Music/Spotify 状态变了，跟着播一段 + 冒一句，气泡挂音符标
+  function onMusic(d) {
+    if (!d) return
+    const hold = d.holdMs || 6000
+    manualUntil = Date.now() + hold
+    phase = 'idle'
+    clearTimeout(phaseTimer)
+    clearRotate()
+    if (d.anim) play(d.anim, { onEnd: () => nextIdle() })
+    squish()
+    showBubble(d.line || '♪', { music: true }, hold)
+  }
+  api.on('pet:music', onMusic)
   // 羁绊进化：亲密度跨档时播变身演出。气泡挂个 evolve 标记做金色描边，
   // 跟普通汇报、小纸条区分开，让「升级」这件事有仪式感。
   function onEvolve(d) {
@@ -1476,6 +1508,8 @@
     let noteProbe = null
     let speakProbe = null
     let chatProbe = null
+    let snarkProbe = null
+    let musicProbe = null
     let evolveProbe = null
     let crawlProbe = null
     if (boot.selftest) {
@@ -1710,6 +1744,24 @@
           line: bubbleText.textContent,
         }
         hideBubble()
+        // 毒舌吐槽：强制推一句，验证红标 / 台词 / 角标都到位
+        onSnark({ line: '自检毒舌', anim: null, holdMs: 3000 })
+        snarkProbe = {
+          shown: bubble.classList.contains('show'),
+          line: bubbleText.textContent,
+          snarkClass: bubble.classList.contains('snark'),
+          tag: noteTag.textContent,
+        }
+        hideBubble()
+        // 听歌一起蹦：强制推一次，验证音符标 / 台词都到位
+        onMusic({ line: '自检听歌', anim: null, holdMs: 3000 })
+        musicProbe = {
+          shown: bubble.classList.contains('show'),
+          line: bubbleText.textContent,
+          musicClass: bubble.classList.contains('music'),
+          tag: noteTag.textContent,
+        }
+        hideBubble()
         // 羁绊进化：强制推一次变身演出，验证形态标题 + 特权 + 金色描边都到位
         onEvolve({ formLabel: '测试形态', line: '进化啦', perkText: '测试特权', anim: null })
         evolveProbe = {
@@ -1767,8 +1819,9 @@
         // 自绘气泡菜单：主页面 8 项 + 翻页子页渲染 + 开关切换
         let menuProbe
         try {
-          // 第一屏不再有独立的 feast（喂白饭已并入喂一口的随机演出）
-          const expected = ['chat', 'poke', 'rps', 'note', 'feed', 'speak', 'crawl', 'game', 'sleep', 'meme', '__more__']
+          // 菜单整理后第一屏：按类别聚拢 12 项。整活大功能分身/水族馆提到一级，
+          // 哄睡觉(sleep)移到二级「歇会儿」组；喂白饭仍并入喂一口。
+          const expected = ['chat', 'poke', 'feed', 'speak', 'note', 'meme', 'rps', 'game', 'crawl', 'clones', 'aquarium', '__more__']
           openActionMenu()
           const opened = actionMenu.classList.contains('show') && document.body.classList.contains('menu-open')
           const scrimOn = !!menuScrim && getComputedStyle(menuScrim).display === 'block' && getComputedStyle(menuScrim).pointerEvents === 'auto'
@@ -2035,6 +2088,8 @@
           note: noteProbe,
           speak: speakProbe,
           chat: chatProbe,
+          snark: snarkProbe,
+          music: musicProbe,
           evolve: evolveProbe,
           crawl: crawlProbe,
           actionMenu: menuProbe,

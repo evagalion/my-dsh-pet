@@ -24,6 +24,9 @@ const achieve = require('./achieve')
 const lonely = require('./lonely')
 const note = require('./note')
 const evolve = require('./evolve')
+const snark = require('./snark')
+const music = require('./music')
+const aquarium = require('./aquarium')
 
 const pick = (arr) => (arr && arr.length ? arr[Math.floor(Math.random() * arr.length)] : null)
 
@@ -35,6 +38,7 @@ const MENU_ACTIONS = [
   'digest', 'replayEvolve', // 查看/回看
   'game', // 弹弓弹射小游戏
   'sleep', 'wake', 'feast', 'meme', // 新素材玩法：睡觉 / 叫醒 / 白饭演出 / 梗图
+  'snarkToggle', 'musicToggle', 'clones', 'aquarium', // 毒舌吐槽 / 听歌跳舞 / 分身大乱斗 / 水族馆
 ]
 
 protocol.registerSchemesAsPrivileged([
@@ -71,6 +75,8 @@ let crawler = null
 let crawlerTimer = null
 let crawlerOn = false
 let tray = null
+let cloneWin = null // 分身大乱斗的全屏透明层
+let aqWin = null // 水族馆底部窗口
 let lastKnown = { phase: 'idle', project: '', detail: '', source: 'none', title: '' }
 
 function boundsOf() {
@@ -797,6 +803,155 @@ function doMeme() {
   sfx.click(cfg, true)
 }
 
+// ---- C 毒舌实时吐槽 ----
+
+// 把 snark 吐出的事件在鱼身上演出来：气泡压住状态机几秒 + 播动画 + 语音。
+function fireSnark(ev) {
+  if (!ev || !win || win.isDestroyed()) return
+  win.webContents.send('pet:snark', ev)
+  if (ev.line) sfx.speakText(cfg, ev.line)
+}
+
+// 主进程定时/事件驱动毒舌。all = 三家状态，extra = stuck/agent/what/workMin/justSwitched。
+function snarkEvent(all, extra) {
+  if (!win || win.isDestroyed()) return
+  const now = Date.now()
+  const mw = mood.watch(cfg, all, now)
+  const workMin = (() => {
+    const w = (all || []).find((a) => a && a.phase === 'working')
+    return w ? Math.round((now - (w.since || now)) / 60000) : 0
+  })()
+  const ev = snark.onEvent(cfg, all, now, Object.assign({ stuck: mw && mw.stuck, workMin }, extra || {}))
+  if (ev) fireSnark(ev)
+}
+function snarkIdleTick(all) {
+  if (!win || win.isDestroyed()) return
+  const ev = snark.onIdleTick(cfg, all, Date.now())
+  if (ev) fireSnark(ev)
+}
+function toggleSnark() {
+  const s = cfg.snark || (cfg.snark = {})
+  s.enabled = s.enabled === false
+  saveConfig(cfg)
+  if (win && !win.isDestroyed()) {
+    win.webContents.send('pet:say', {
+      line: s.enabled ? '嘴欠模式已开，小心我损你~' : '好啦好啦，闭嘴了',
+      anim: null, note: null,
+    })
+  }
+}
+
+// ---- D 听歌一起蹦 ----
+
+// 音乐状态变化 → 播对应舞步/反应 + 气泡 + 语音。
+function fireMusic(ev) {
+  if (!win || win.isDestroyed()) return
+  const m = cfg.music || {}
+  const lines = m.lines || {}
+  // 有歌名就用带 {track} 的池并替换；没歌名（Apple 侧偶尔拿不到）退回普通池
+  let pool = lines[ev.type]
+  if (ev.type === 'track' && !ev.track) pool = lines.trackNoName || pool
+  let line = pick(pool) || ''
+  if (line && ev.track) {
+    line = line.replace(/\{track\}/g, String(ev.track).slice(0, 24))
+  }
+  const anim = pick((m.anims || {})[ev.type]) || null
+  win.webContents.send('pet:music', { type: ev.type, line, anim, track: ev.track, app: ev.app })
+  if (line) sfx.speakText(cfg, line)
+}
+function toggleMusic() {
+  const m = cfg.music || (cfg.music = {})
+  m.enabled = m.enabled === false
+  saveConfig(cfg)
+  if (win && !win.isDestroyed()) {
+    win.webContents.send('pet:say', {
+      line: m.enabled ? '音乐雷达开了，放首歌我伴舞~' : '不听了不听了',
+      anim: null, note: null,
+    })
+  }
+}
+
+// ---- E 分身大乱斗 ----
+
+function openClones() {
+  if (cloneWin && !cloneWin.isDestroyed()) {
+    cloneWin.focus()
+    return
+  }
+  if (!win || win.isDestroyed()) return
+  const disp = screen.getDisplayMatching(win.getBounds())
+  const wa = disp.workArea
+  const c = cfg.clones || {}
+  cloneWin = new BrowserWindow({
+    x: wa.x, y: wa.y, width: wa.width, height: wa.height,
+    transparent: true, frame: false, resizable: false, movable: false,
+    focusable: false, skipTaskbar: true, hasShadow: false,
+    backgroundColor: '#00000000',
+    webPreferences: {
+      preload: path.join(__dirname, '..', 'clones-preload.js'),
+      contextIsolation: true, nodeIntegration: false,
+    },
+  })
+  // 默认穿透：不挡你点别的窗口。hover 到分身上时由 clone:hover 临时关穿透。
+  cloneWin.setIgnoreMouseEvents(true, { forward: true })
+  cloneWin.setAlwaysOnTop(true, 'floating')
+  cloneWin.loadFile(path.join(__dirname, '..', 'renderer', 'clones.html'))
+  cloneWin.webContents.once('did-finish-load', () => {
+    cloneWin.webContents.send('clone:init', {
+      anims: c.anims, maxClones: c.maxClones || 8,
+      initial: c.initial || 1, width: wa.width, height: wa.height,
+      game: c.game || {},
+    })
+  })
+  cloneWin.on('closed', () => { cloneWin = null })
+}
+function closeClones() {
+  if (cloneWin && !cloneWin.isDestroyed()) {
+    try { cloneWin.webContents.send('clone:bye') } catch {}
+    try { cloneWin.close() } catch {}
+  }
+  cloneWin = null
+}
+function toggleClones() {
+  if (cloneWin && !cloneWin.isDestroyed()) closeClones()
+  else openClones()
+}
+
+// ---- F 底部小水族馆 ----
+
+function openAquarium() {
+  if (aqWin && !aqWin.isDestroyed()) {
+    aqWin.focus()
+    return
+  }
+  const disp = screen.getPrimaryDisplay()
+  const wa = disp.workArea
+  const h = (cfg.aquarium && cfg.aquarium.height) || 210
+  aqWin = new BrowserWindow({
+    x: wa.x, y: wa.y + wa.height - h, width: wa.width, height: h,
+    transparent: true, frame: false, resizable: false, movable: false,
+    focusable: false, skipTaskbar: true, hasShadow: false,
+    backgroundColor: '#00000000',
+    webPreferences: {
+      preload: path.join(__dirname, '..', 'aquarium-preload.js'),
+      contextIsolation: true, nodeIntegration: false,
+    },
+  })
+  aqWin.setAlwaysOnTop(true, 'floating')
+  aqWin.loadFile(path.join(__dirname, '..', 'renderer', 'aquarium.html'))
+  aqWin.on('closed', () => { aqWin = null })
+}
+function closeAquarium() {
+  if (aqWin && !aqWin.isDestroyed()) {
+    try { aqWin.close() } catch {}
+  }
+  aqWin = null
+}
+function toggleAquarium() {
+  if (aqWin && !aqWin.isDestroyed()) closeAquarium()
+  else openAquarium()
+}
+
 // 饱腹度只读展示，归到「状态」子菜单
 function feedStatusItem() {
   const v = feed.fullness(cfg)
@@ -1478,6 +1633,18 @@ function dispatchMenuAction(action) {
     case 'meme':
       doMeme()
       break
+    case 'snarkToggle':
+      toggleSnark()
+      break
+    case 'musicToggle':
+      toggleMusic()
+      break
+    case 'clones':
+      toggleClones()
+      break
+    case 'aquarium':
+      toggleAquarium()
+      break
     case 'quit':
       app.quit()
       return
@@ -1523,13 +1690,27 @@ function buildActionMenuData() {
   if (evS.enabled && evS.unlocked) view.push({ ico: '👀', tint: '#7b6cd4', txt: '回看当前形态', action: 'replayEvolve' })
   if (view.length) groups.push({ title: '看看', icon: '👀', tint: '#7b6cd4', layout: 'grid', items: view })
 
-  // 玩点别的：新下载的睡觉 / 梗图素材。白饭演出已并入「喂一口」的随机分支，
-  // 不再单列入口（原来和「喂一口」功能重复）。
-  const playGrp = [
+  // 歇会儿：睡觉演出。斗图已提到一级、白饭并入「喂一口」，不再在这里重复列入口
+  const restGrp = [
     { ico: sleepingNow ? '🌅' : '😴', tint: '#7b6cd4', txt: sleepingNow ? '叫醒它' : '哄它睡觉', hint: sleepingNow ? '醒来啦' : '三段睡觉动画', action: sleepingNow ? 'wake' : 'sleep' },
-    { ico: '🖼️', tint: '#e0679a', txt: '斗张图', hint: '随机表情包', action: 'meme' },
   ]
-  groups.push({ title: '玩点别的', icon: '🎲', tint: '#e0679a', layout: 'grid', items: playGrp })
+  groups.push({ title: '歇会儿', icon: '😴', tint: '#7b6cd4', layout: 'grid', items: restGrp })
+
+  // 整活开关：毒舌 / 听歌这类「开了就一直生效」的整活开关单独成组，跟音效设置分开。
+  // 分身大乱斗 / 水族馆是开独立层的动作，已提到一级，不再这里重复。
+  const toggles = [
+    {
+      ico: '😈', tint: '#e0679a',
+      txt: (cfg.snark && cfg.snark.enabled !== false ? '嘴欠模式：开' : '嘴欠模式：关'),
+      hint: '实时吐槽你的操作', action: 'snarkToggle',
+    },
+    {
+      ico: '🎧', tint: '#378add',
+      txt: (cfg.music && cfg.music.enabled !== false ? '听歌伴舞：开' : '听歌伴舞：关'),
+      hint: '检测音乐自动跳', action: 'musicToggle',
+    },
+  ]
+  groups.push({ title: '整活开关', icon: '🎪', tint: '#e0679a', layout: 'grid', items: toggles })
 
   // 打开工具
   const open = [
@@ -1549,6 +1730,7 @@ function buildActionMenuData() {
   ]
   if (sfx.auditionPath()) setting.push({ ico: '🎵', tint: '#7b6cd4', txt: '挑语音音色…', hint: '试听', action: 'audition' })
   if (sfx.clickAvailable()) setting.push({ ico: '👆', tint: '#e0679a', txt: clickMenuLabel(), hint: '开关', action: 'clickSfx' })
+  // 嘴欠模式 / 听歌伴舞已移到「整活开关」组，设置只留纯设置项
   setting.push({ ico: '🪟', tint: '#7d8a99', txt: clickThroughLabel(), hint: '开关', action: 'clickThrough' })
   setting.push({ ico: '📍', tint: '#2a9d8f', txt: '回到屏幕右下角', action: 'reset' })
   setting.push({ ico: '🔄', tint: '#7d8a99', txt: '重载配置', action: 'reload' })
@@ -1741,6 +1923,18 @@ function applyOccasion(now) {
 }
 
 function pushState(s, force) {
+  // 毒舌事件触发：失败、切任务时损一句。只在自检之外，且状态真的变了才触发。
+  if (!SELFTEST && s && win && !win.isDestroyed()) {
+    const prevPhase = lastKnown.phase
+    const isError = s.phase === 'error' && prevPhase !== 'error'
+    const isSwitch =
+      s.phase === 'working' && prevPhase === 'working' && s.project && s.project !== lastKnown.project
+    if (isError || isSwitch) {
+      // 构造一个只含当前 agent 的 all，给 snark 的场景判定用
+      const one = [{ phase: s.phase, source: s.source, project: s.project, title: s.title, since: Date.now() }]
+      snarkEvent(one, { agent: agentOf(s.source).label, what: whatOf(s), justSwitched: isSwitch })
+    }
+  }
   lastKnown = {
     phase: s.phase,
     project: s.project,
@@ -2155,7 +2349,7 @@ app.whenReady().then(() => {
               pics.every(has) &&
               memes.length >= 20 &&
               ['sleep', 'wake', 'feast', 'meme'].every((a) => MENU_ACTIONS.includes(a)) &&
-              buildActionMenuData().some((g) => g.title === '玩点别的')
+              buildActionMenuData().some((g) => g.title === '歇会儿')
             )
           })(),
           newMediaMemeCount: (() => {
@@ -2318,6 +2512,95 @@ app.whenReady().then(() => {
             typeof applyClickThrough === 'function' &&
             typeof closeTargetLayer === 'function' &&
             typeof slingshotMode === 'boolean',
+
+          // ===== 本轮四功能 =====
+          // 毒舌吐槽：场景识别 + 文案池 + 冷却判定都到位（纯函数，不真推送）
+          snarkOk: (() => {
+            try {
+              const sceneErr = snark.sceneOf([{ phase: 'error' }], Date.now(), {})
+              const sceneSwitch = snark.sceneOf([{ phase: 'working' }], Date.now(), { justSwitched: true })
+              const line = snark.pickLine(cfg, 'error', { agent: '甲', what: '编译' })
+              const snap = snark.snapshot(cfg)
+              const off = snark.shouldFire({ snark: { enabled: false } }, Date.now(), 'error')
+              return (
+                sceneErr === 'error' &&
+                sceneSwitch === 'switch' &&
+                !!line && line.indexOf('{') === -1 &&
+                snap.scenes.length >= 6 && snap.totalLines >= 20 && snap.enabled &&
+                off === false &&
+                typeof fireSnark === 'function' && typeof snarkIdleTick === 'function' &&
+                MENU_ACTIONS.includes('snarkToggle')
+              )
+            } catch (e) {
+              return false
+            }
+          })(),
+          // 听歌一起蹦：Apple 状态解析 + 网易云切歌判定 + 歌名占位符都到位（不真读文件/不查系统）
+          musicOk: (() => {
+            try {
+              const playing = music.parseStatus('Music|playing|晴天;')
+              const paused = music.parseStatus('Spotify|paused|稻香;Music|stopped|;')
+              const a = music.diff({ state: 'stopped', track: '' }, playing)
+              const b = music.diff(playing, Object.assign({}, playing, { track: '夜曲' }))
+              const c = music.diff(playing, Object.assign({}, playing, { state: 'paused' }))
+              // 网易云：首次只播种、rowid 变大且换歌才报、同一首不重复
+              const ncSeed = music.diffNetease(null, { rowid: 10, track: '必杀技' })
+              const ncNew = music.diffNetease({ rowid: 10, track: '必杀技' }, { rowid: 11, track: '晴天' })
+              const ncSame = music.diffNetease({ rowid: 10, track: '必杀技' }, { rowid: 11, track: '必杀技' })
+              const ncOld = music.diffNetease({ rowid: 10, track: 'a' }, { rowid: 9, track: 'b' })
+              const trackPool = ((cfg.music || {}).lines || {}).track || []
+              const hasPlaceholder = trackPool.some((s) => s.includes('{track}'))
+              const noNamePool = (((cfg.music || {}).lines || {}).trackNoName || []).length > 0
+              return (
+                playing.state === 'playing' && playing.track === '晴天' &&
+                paused.state === 'paused' && paused.app === 'Spotify' &&
+                a === 'start' && b === 'track' && c === 'pause' &&
+                ncSeed === null && ncNew && ncNew.type === 'track' && ncNew.track === '晴天' &&
+                ncSame === null && ncOld === null &&
+                hasPlaceholder && noNamePool &&
+                typeof fireMusic === 'function' && typeof music.poll === 'function' &&
+                typeof music.diffNetease === 'function' && typeof music.readNetease === 'function' &&
+                MENU_ACTIONS.includes('musicToggle')
+              )
+            } catch (e) {
+              return false
+            }
+          })(),
+          // 分身大乱斗：菜单入口 + 开窗函数 + 限时抓鱼游戏参数就位（不读写真实存档/不查系统）
+          clonesOk: (() => {
+            try {
+              const g = (cfg.clones || {}).game || {}
+              const nums = ['durationMs', 'targetScore', 'baseScore', 'boosterScore', 'comboWindowMs', 'maxComboMult', 'fishCount', 'respawnMs']
+              const cfgOk = nums.every((k) => Number.isFinite(g[k]) && g[k] > 0)
+              return (
+                MENU_ACTIONS.includes('clones') &&
+                typeof openClones === 'function' &&
+                typeof closeClones === 'function' &&
+                typeof toggleClones === 'function' &&
+                cfgOk &&
+                g.maxComboMult >= 2 && g.boosterScore > g.baseScore
+              )
+            } catch (e) { return false }
+          })(),
+          // 底部小水族馆：纯产出计算 + 鱼种图鉴 + IPC + 开窗函数就位（只调纯函数，不写真实存档）
+          aquariumOk: (() => {
+            try {
+              const base = { growth: 0, unlocked: ['fish'], level: 1 }
+              const r1 = aquarium.accrue(base, 10, cfg)
+              const r2 = aquarium.accrue(base, 1000, cfg)
+              const species = aquarium.speciesList()
+              return (
+                r1.coins > 0 && r1.growth > 0 && r1.growth <= 100 &&
+                r2.growth === 100 && r2.coins > r1.coins &&
+                species.length >= 5 &&
+                MENU_ACTIONS.includes('aquarium') &&
+                typeof openAquarium === 'function' &&
+                typeof aquarium.feed === 'function' && typeof aquarium.unlock === 'function'
+              )
+            } catch (e) {
+              return false
+            }
+          })(),
         })
       })
       .catch((e) => finish({ menuBuilt: false, menuError: String((e && e.message) || e).slice(0, 400) }))
@@ -2369,6 +2652,42 @@ app.whenReady().then(() => {
   ipcMain.handle('pet:menu-data', () => buildActionMenuData())
   // 动作库页数据：11 个动画分类。渲染层点进「动作库」入口时才取，避免每次开菜单白造一份
   ipcMain.handle('pet:animlib-data', () => buildAnimLibMenuData())
+
+  // ---- 分身大乱斗层（限时抓鱼挑战）----
+  ipcMain.handle('clone:boot', () => ({
+    anims: (cfg.clones || {}).anims || [],
+    maxClones: (cfg.clones || {}).maxClones || 8,
+    initial: (cfg.clones || {}).initial || 1,
+    game: (cfg.clones || {}).game || {},
+  }))
+  ipcMain.on('clone:split', () => { /* 兼容旧钩子；分裂/抓鱼纯渲染层完成 */ sfx.click(cfg, true) })
+  // 抓鱼命中：金色鱼连播两下更清脆
+  ipcMain.on('clone:caught', (_e, golden) => {
+    sfx.click(cfg, true)
+    if (golden) setTimeout(() => { try { sfx.click(cfg, true) } catch {} }, 90)
+  })
+  // 一局结束：赢了用大肥鱼语音报个喜，输了就算了（别打击人）
+  ipcMain.on('clone:over', (_e, d) => {
+    if (d && d.win) {
+      const line = `抓到 ${d.caught} 条，最高连击 ${d.maxCombo}，好厉害！`
+      try { sfx.speakText(cfg, line, true) } catch {}
+    }
+  })
+  ipcMain.on('clone:quit', () => closeClones())
+  // hover 到分身上关穿透，离开恢复；这样既能点分裂又不挡别的应用
+  ipcMain.on('clone:hover', (_e, on) => {
+    if (cloneWin && !cloneWin.isDestroyed()) {
+      try { cloneWin.setIgnoreMouseEvents(!on, { forward: !on }) } catch {}
+    }
+  })
+
+  // ---- 水族馆层 ----
+  ipcMain.handle('aq:boot', () => aquarium.snapshot(cfg, Date.now()))
+  ipcMain.handle('aq:feed', () => aquarium.feed(cfg, Date.now()))
+  ipcMain.handle('aq:unlock', (_e, id) => aquarium.unlock(cfg, id))
+  ipcMain.handle('aq:upgrade', () => aquarium.upgrade(cfg))
+  ipcMain.on('aq:close', () => closeAquarium())
+
   // 气泡菜单项点击：主进程统一分发，执行后收起菜单还原窗口
   ipcMain.on('pet:action', (_e, action) => {
     dispatchMenuAction(action)
@@ -2425,6 +2744,19 @@ app.whenReady().then(() => {
   watcher = createWatcher(cfg)
   // 心情要看三家各自的状态，全量探测不必每秒做一次，隔一阵子扫一遍就够
   let moodAt = 0
+  // 听歌检测：自检模式不查真实系统（osascript 在 CI/无播放器环境会让 probe 不稳）
+  if (!SELFTEST) {
+    const musicLoop = async () => {
+      try {
+        const ev = await music.poll(cfg, Date.now())
+        if (ev) fireMusic(ev)
+      } catch (e) {
+        /* 音乐检测不是关键路径 */
+      }
+      setTimeout(musicLoop, (cfg.music && cfg.music.pollMs) || 4000)
+    }
+    setTimeout(musicLoop, 3000)
+  }
   const tick = async () => {
     try {
       const s = await watcher.poll()
@@ -2444,6 +2776,8 @@ app.whenReady().then(() => {
           applyOccasion(now)
           applyLonely(all, now)
           applyNote(all, now)
+          // 定时嘴欠：只在闲着的时候冒，忙时交给事件触发
+          if (!SELFTEST) snarkIdleTick(all)
         })
         .catch(() => {})
     }

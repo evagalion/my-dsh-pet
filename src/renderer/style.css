@@ -173,13 +173,44 @@ body.through #stage {
 .note-tag {
   display: none;
 }
-.bubble.note .note-tag {
+.bubble.note .note-tag,
+.bubble.snark .note-tag,
+.bubble.music .note-tag {
   display: block;
   margin-bottom: 4px;
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 1px;
   color: #b09b3e;
+}
+
+/* 毒舌吐槽：火红底 + 尖角，配"毒舌"红标，一眼看出在损你 */
+.bubble.snark {
+  background: linear-gradient(135deg, #fff2f0 0%, #ffe0da 100%);
+  border: 1px solid #ef7a6a;
+  color: #8f2f22;
+  box-shadow: 0 3px 12px rgba(190, 60, 40, 0.22);
+  font-weight: 600;
+}
+.bubble.snark .note-tag {
+  color: #d1402c;
+}
+
+/* 听歌一起蹦：紫粉渐变 + 音符标，跟着节拍闪一下 */
+.bubble.music {
+  background: linear-gradient(135deg, #f6eeff 0%, #efd9ff 100%);
+  border: 1px solid #b57ae0;
+  color: #6a2f96;
+  box-shadow: 0 3px 12px rgba(150, 70, 200, 0.22);
+  font-weight: 600;
+  animation: musicPulse 0.7s ease-in-out 3;
+}
+.bubble.music .note-tag {
+  color: #9a45cf;
+}
+@keyframes musicPulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.04); }
 }
 
 /* 羁绊进化：金色描边 + 柔光，跟普通汇报/便签一眼区分开 */
