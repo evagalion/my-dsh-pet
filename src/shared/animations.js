@@ -5,6 +5,14 @@
 
 const MOVE_SET = new Set(['螃蟹走路', '原地漂浮踏步', '原地左转奔跑'])
 
+// 玩法专属素材：睡觉三段、喂饭演出四段。这些只在对应玩法里按序列播，
+// 不能混进待机随机池——否则待机时冷不丁蹦出「睡觉-开始 / 期待开饭」很出戏。
+// 菜单里仍归到「特殊时刻（平时不自动播）」分组，可以手动点播看效果。
+const STAGE_SET = new Set([
+  '睡觉-开始', '睡觉-循环', '睡觉-起来',
+  '开心小跑', '侧身急躁跑', '期待开饭', '吃饭·碗饭', '吃饭团',
+])
+
 // 「专属时刻」的素材：成就大招、节日动作、作息动画、拆礼物……
 // 这些平时混在趣味池里随机播得到，后果有两个：
 //   1. 待机时撞出「蓝鲸现世」，等真达成成就时已经不稀奇了
@@ -83,7 +91,7 @@ function classify(assets, cfg) {
       p.turn.push(a)
     } else if (MOVE_SET.has(a)) {
       p.move.push(a)
-    } else if (reserved.has(a)) {
+    } else if (reserved.has(a) || STAGE_SET.has(a)) {
       p.special.push(a) // 只在特定时刻自动播，菜单里仍能手动点
     } else {
       p.fun.push(a)

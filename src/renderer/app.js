@@ -11,6 +11,7 @@
   const bubbleWhat = document.getElementById('bubble-what')
   const bubbleMeta = document.getElementById('bubble-meta')
   const bubbleStep = document.getElementById('bubble-step')
+  const bubbleImg = document.getElementById('bubble-img')
   const noteTag = document.getElementById('bubble-note-tag')
 
   let cfg = null
@@ -30,6 +31,10 @@
   let holdLine = '' // 「卡太久」这类提醒要在几秒内压住状态机的台词，不然下一秒就被冲掉
   let holdUntil = 0
   let occasion = null // 今天过什么节（含应季动作），主进程下发，一天一变
+  let sleeping = false // 睡觉玩法：睡着时戳它只"嘘"一声，不打断美梦
+  let sleepLine = '' // 睡觉时气泡里挂的那句"别吵"
+  let bubbleImgTimer = null // 梗图配图的独立定时，避免被文字气泡刷新冲掉
+  let bubbleImgVisible = false // 当前是否有配图在显示（扩窗状态跟着它走）
 
   const rand = (arr) => (arr && arr.length ? arr[Math.floor(Math.random() * arr.length)] : null)
 
@@ -315,6 +320,30 @@
     bubbleMeta.style.display = meta ? 'block' : 'none'
 
     bubbleText.textContent = text || ''
+    // 配图（梗图 / 通知图）：s.img 是 pet:// URL。图片自身带独立定时，
+    // 文字气泡每 0.5~1s 会被状态推送刷一次，配图不能跟着闪。
+    if (bubbleImg) {
+      clearTimeout(bubbleImgTimer)
+      if (s.img) {
+        if (!bubbleImgVisible) api.picOpen() // 首次出图才扩窗，连续刷新不重复
+        bubbleImgVisible = true
+        bubbleImg.src = s.img
+        bubbleImg.style.display = 'block'
+        bubbleImg.onerror = () => {
+          bubbleImg.style.display = 'none'
+          if (bubbleImgVisible) { bubbleImgVisible = false; api.picClose() } // 图裂了恢复窗口
+        }
+        bubbleImgTimer = setTimeout(() => {
+          bubbleImg.style.display = 'none'
+          if (bubbleImgVisible) { bubbleImgVisible = false; api.picClose() }
+        }, s.imgMs || ms || 4000)
+      } else if (bubbleImgVisible) {
+        bubbleImg.style.display = 'none'
+        bubbleImg.removeAttribute('src')
+        bubbleImgVisible = false
+        api.picClose()
+      }
+    }
     // 便签样式是"一次性"的：这次显示完（含被下一次普通气泡打断）就恢复成普通气泡
     bubble.classList.toggle('note', !!s.note)
     bubble.classList.toggle('evolve', !!s.evolve)
@@ -328,6 +357,12 @@
     bubble.classList.remove('show')
     bubble.classList.remove('note')
     bubble.classList.remove('evolve')
+    if (bubbleImg) {
+      clearTimeout(bubbleImgTimer)
+      bubbleImg.style.display = 'none'
+      bubbleImg.removeAttribute('src')
+      if (bubbleImgVisible) { bubbleImgVisible = false; api.picClose() }
+    }
   }
 
   function squish() {
@@ -467,6 +502,7 @@
       return
     }
     dragging = true
+    document.body.classList.add('dragging')
     downAt = performance.now()
     lastX = typeof e.screenX === 'number' ? e.screenX : null
     lastY = typeof e.screenY === 'number' ? e.screenY : null
@@ -539,6 +575,7 @@
     if (!dragging) return
     dbg('pointerup', { movedDist, vel })
     dragging = false
+    document.body.classList.remove('dragging')
     try {
       hit.releasePointerCapture(e.pointerId)
     } catch (err) {
@@ -562,6 +599,8 @@
   })
 
   hit.addEventListener('pointercancel', (e) => {
+    dragging = false
+    document.body.classList.remove('dragging')
     if (window.SlingshotGame && window.SlingshotGame.isOpen()) {
       try {
         hit.releasePointerCapture(e.pointerId)
@@ -586,7 +625,10 @@
   const actionMenuTitle = actionMenu.querySelector('.action-menu-title')
   let menuOpen = false
   let menuPage = 'main' // 'main' | 'more'（分组宫格目录）| 'group'（组内宫格）
-  let moreGroups = [] // 缓存更多页分组数据，供目录→组内→返回复用
+  // 动作库复用 more/group 两套渲染，只靠 groupBackSource 区分数据源与返回目标
+  let moreGroups = [] // 缓存更多页分组数据
+  let animLibGroups = [] // 缓存动作库分类数据
+  let groupBackSource = 'more' // 当前组内页从哪个目录进来：'more' | 'animlib'
 
   // 主页面动作清单。每项自带 icon（emoji）+ 主题色（ico/tint），特殊动作 __more__/__back__ 只翻页。
   function actionList() {
@@ -596,7 +638,7 @@
       { action: 'poke', ico: '🤚', tint: '#e0679a', txt: '摸一下', hint: '', enabled: true },
       { action: 'rps', ico: '✊', tint: '#e08a3c', txt: '猜个拳', hint: '石头剪刀布', enabled: (c.rps || {}).enabled !== false },
       { action: 'note', ico: '📝', tint: '#b8860b', txt: '递纸条', hint: '', enabled: (c.note || {}).enabled !== false },
-      { action: 'feed', ico: '🍚', tint: '#4c9e6a', txt: '喂一口', hint: '', enabled: c.feed && c.feed.enabled !== false },
+      { action: 'feed', ico: '🍚', tint: '#4c9e6a', txt: '喂一口', hint: '偶尔有惊喜', enabled: c.feed && c.feed.enabled !== false },
       { action: 'speak', ico: '💭', tint: '#7b6cd4', txt: '在干嘛', hint: '', enabled: true },
       {
         action: 'crawl',
@@ -614,6 +656,16 @@
         hint: document.body.classList.contains('slingshot-mode') ? '退出发射器' : '弹射我自己',
         enabled: true,
       },
+      // 新素材玩法，放第一屏显眼位置，不再藏进三级菜单
+      {
+        action: 'sleep',
+        ico: sleeping ? '🌅' : '😴',
+        tint: '#7b6cd4',
+        txt: sleeping ? '叫醒它' : '哄睡觉',
+        hint: '',
+        enabled: true,
+      },
+      { action: 'meme', ico: '🖼️', tint: '#e0679a', txt: '斗张图', hint: '', enabled: true },
       { action: '__more__', ico: '⚙️', tint: '#7d8a99', txt: '更多', hint: '状态 / 设置 / 退出', enabled: true },
     ]
     return list.filter((x) => x.enabled)
@@ -682,16 +734,29 @@
         showMorePage()
         return
       }
+      if (it.action === 'animLib') {
+        showAnimLibPage()
+        return
+      }
       if (it.action === '__back__') {
         showMainPage()
         return
       }
       if (it.action === '__more-back__') {
+        // 组内页返回：从动作库进来的回动作库目录，否则回更多页目录
+        if (groupBackSource === 'animlib') showAnimLibIndex()
+        else showMoreIndex()
+        return
+      }
+      if (it.action === '__animlib-back__') {
+        // 动作库目录页返回 → 回更多页目录
         showMoreIndex()
         return
       }
       closeActionMenu()
-      api.action(it.action)
+      // 动作库的点播项：动画名在本地直接播，不必绕主进程 IPC（playByName 就在本文件里）
+      if (it.anim && typeof playByName === 'function') playByName(it.anim)
+      else api.action(it.action)
     })
     return btn
   }
@@ -705,17 +770,23 @@
     actionList().forEach((it, i) => actionMenuItems.appendChild(makeItem(it, i, true)))
   }
 
-  // 更多页·目录：把每个分组做成一个彩色宫格块，和主菜单同一套视觉。
+  // 目录页：把每个分组做成一个彩色宫格块，和主菜单同一套视觉。
+  // 更多页与动作库共用这一套渲染，靠 source 切换数据源 / 标题 / 返回动作。
   // 点某块进入 renderGroupPage 看该组内容；自检可直接喂假数据验证。
-  function renderMoreIndex(groups) {
-    moreGroups = groups || []
+  function renderMoreIndex(groups, source) {
+    const sc = source === 'animlib' ? 'animlib' : 'more'
+    if (sc === 'animlib') animLibGroups = groups || []
+    else moreGroups = groups || []
+    groupBackSource = sc
     menuPage = 'more'
     actionMenu.classList.remove('page-main', 'page-more-group')
     actionMenu.classList.add('page-more')
-    actionMenuTitle.textContent = '更多设置'
+    actionMenuTitle.textContent = sc === 'animlib' ? '🎬 动作库' : '更多设置'
     actionMenuItems.innerHTML = ''
-    actionMenuItems.appendChild(makeItem({ action: '__back__', ico: '‹', txt: '返回', hint: '' }, 0))
-    moreGroups.forEach((g, gi) => {
+    // 动作库目录返回回更多页；更多页目录返回回主页面
+    const backAction = sc === 'animlib' ? '__animlib-back__' : '__back__'
+    actionMenuItems.appendChild(makeItem({ action: backAction, ico: '‹', txt: '返回', hint: '' }, 0))
+    ;(groups || []).forEach((g, gi) => {
       const tile = document.createElement('button')
       tile.type = 'button'
       tile.className = 'action-item group-tile'
@@ -732,16 +803,23 @@
       tile.appendChild(txt)
       tile.addEventListener('click', (ev) => {
         ev.stopPropagation()
-        renderGroupPage(gi)
+        // 带 jump 的块直接跳目标页，不再进只有单个按钮的"组内页"那一级
+        if (g.jump === 'animlib') {
+          showAnimLibPage()
+          return
+        }
+        renderGroupPage(gi, sc)
       })
       actionMenuItems.appendChild(tile)
     })
   }
 
-  // 更多页·组内：某个分组的具体项目，宫格排布。纯只读组用 2 列，其余 4 列。
-  function renderGroupPage(gi) {
-    const g = moreGroups[gi]
+  // 组内页：某个分组的具体项目，宫格排布。纯只读组用 2 列，其余 4 列。
+  function renderGroupPage(gi, source) {
+    const list = source === 'animlib' ? animLibGroups : moreGroups
+    const g = list[gi]
     if (!g) return
+    groupBackSource = source === 'animlib' ? 'animlib' : 'more'
     menuPage = 'group'
     actionMenu.classList.remove('page-main')
     actionMenu.classList.add('page-more', 'page-more-group')
@@ -779,10 +857,34 @@
     renderMoreIndex(moreGroups)
   }
 
+  // 动作库：从「更多」页点入口进入，异步取 11 个动画分类；沿用目录宫格渲染。
+  // 菜单太乱的元凶就是过去把这 11 组平铺进更多页，现在它们独占这一页。
+  async function showAnimLibPage() {
+    menuPage = 'more'
+    actionMenuTitle.textContent = '🎬 动作库'
+    let groups = []
+    try {
+      groups = (await api.animLibData()) || []
+    } catch (e) {
+      groups = []
+    }
+    if (menuPage !== 'more') return
+    renderMoreIndex(groups, 'animlib')
+  }
+
+  // 动作库组内点返回 → 回到动作库分类目录（用缓存，不再异步取）
+  function showAnimLibIndex() {
+    renderMoreIndex(animLibGroups, 'animlib')
+  }
+
   function renderActionMenu() {
-    if (menuPage === 'more') showMorePage()
-    else if (menuPage === 'group') showMoreIndex()
-    else showMainPage()
+    if (menuPage === 'group') {
+      if (groupBackSource === 'animlib') showAnimLibIndex()
+      else showMoreIndex()
+    } else if (menuPage === 'more') {
+      if (groupBackSource === 'animlib') showAnimLibPage()
+      else showMorePage()
+    } else showMainPage()
   }
 
   function openActionMenu() {
@@ -873,6 +975,11 @@
 
   function poke(part) {
     api.click() // 点一下出声。音效在主进程播，不经过渲染层
+    // 睡觉玩法：睡着时戳它只会"嘘"一声，不打断美梦。要醒得走菜单的"叫醒它"或直接拖它
+    if (sleeping) {
+      showBubble('嘘…让它睡会儿 Zzz', { img: 'pet://pic/sleep-zzz.png', imgMs: 2200 }, 2200)
+      return
+    }
     api.bond('poke') // 戳一下涨一点亲密度
     const rule = clickRule()
     if (rule) {
@@ -939,6 +1046,10 @@
   // 喂食：先把食物从角落飘到鱼嘴边，再播"吃XX"动画
   function onFeed(d) {
     if (!d || !d.food) return
+    if (d.show === 'feast') {
+      onFeast(d)
+      return
+    }
     fullness = d.fullness
     manualUntil = Date.now() + 9000
     clearTimeout(phaseTimer)
@@ -955,6 +1066,87 @@
       showBubble(d.line || '', null, 2600)
     }, 520)
   }
+
+  // ---- 睡觉玩法：躺下 → 循环 → 起来，三段串起来播 ----
+  let sleepTimers = []
+  function clearSleepTimers() {
+    sleepTimers.forEach(clearTimeout)
+    sleepTimers = []
+  }
+  function onSleep(d) {
+    if (!d || !d.start) return
+    clearSleepTimers()
+    sleeping = true
+    sleepLine = (d.lines && d.lines[0]) || 'Zzz…'
+    manualUntil = Date.now() + 60000 // 睡觉期间长时间屏蔽状态机
+    clearTimeout(phaseTimer)
+    clearRotate()
+    hideBubble()
+    phase = 'idle'
+    document.body.classList.add('sleeping')
+    // 躺下 → 循环打呼 → 起来。注意 loop:true 的素材不会触发 onended，
+    // 所以循环段播多久完全由定时器决定：进循环后挂一个 9 秒的唤醒定时器。
+    play(d.start, {
+      onEnd: () => {
+        if (!sleeping) return
+        play(d.loop, { loop: true }) // 无缝循环段，一直打呼
+        showBubble(sleepLine, { img: 'pet://pic/sleep-zzz.png', imgMs: 9000 }, 0)
+        sleepTimers.push(setTimeout(() => doWakeAnim(d), 9000)) // 打呼约 9 秒后自己醒
+      },
+    })
+    sleepTimers.push(setTimeout(() => doWakeAnim(d), 20000)) // 兜底：最多睡 20 秒，防 onEnd 不来卡死
+  }
+  function doWakeAnim(d) {
+    if (!sleeping) return
+    clearSleepTimers()
+    sleeping = false
+    sleepLine = ''
+    document.body.classList.remove('sleeping')
+    play((d && d.end) || '睡觉-起来', { onEnd: () => nextIdle() })
+    showBubble((d && d.wakeLine) || '唔…睡饱啦~', null, 3000)
+    manualUntil = Date.now() + 6000
+  }
+  function onWake() {
+    if (sleeping) doWakeAnim({ end: '睡觉-起来' })
+  }
+  api.on('pet:sleep', onSleep)
+  api.on('pet:wake', onWake)
+
+  // 白饭演出：开心小跑(跑到底部) → 期待开饭 → 吃到碗饭/吃饭团，配碗图
+  function onFeast(d) {
+    if (!d) return
+    fullness = d.fullness
+    clearSleepTimers()
+    manualUntil = Date.now() + 16000
+    clearTimeout(phaseTimer)
+    hideBubble()
+    phase = 'idle'
+    const eat = Math.random() < 0.5 ? '吃饭·碗饭' : '吃饭团'
+    play('开心小跑', {
+      onEnd: () =>
+        play('期待开饭', {
+          onEnd: () =>
+            play(eat, {
+              onEnd: () => {
+                hideBubble()
+                nextIdle()
+              },
+            }),
+        }),
+    })
+    showBubble(d.line || '开饭啦！', { img: 'pet://pic/baifan/bowl-full.png', imgMs: 4200 }, 0)
+  }
+
+  // 梗图：气泡配一张随机表情包 + 一句话
+  function onMeme(d) {
+    if (!d || !d.url) return
+    manualUntil = Date.now() + 5000
+    phase = 'idle'
+    clearTimeout(phaseTimer)
+    hideBubble()
+    showBubble(d.line || '看这个~', { img: d.url, imgMs: 5000 }, 5000)
+  }
+  api.on('pet:meme', onMeme)
 
   // 食物标签：从右上角飘到中间，再淡掉。纯 CSS 过渡，不用新素材
   let foodTimer = null
@@ -1575,7 +1767,8 @@
         // 自绘气泡菜单：主页面 8 项 + 翻页子页渲染 + 开关切换
         let menuProbe
         try {
-          const expected = ['chat', 'poke', 'rps', 'note', 'feed', 'speak', 'crawl', 'game', '__more__']
+          // 第一屏不再有独立的 feast（喂白饭已并入喂一口的随机演出）
+          const expected = ['chat', 'poke', 'rps', 'note', 'feed', 'speak', 'crawl', 'game', 'sleep', 'meme', '__more__']
           openActionMenu()
           const opened = actionMenu.classList.contains('show') && document.body.classList.contains('menu-open')
           const scrimOn = !!menuScrim && getComputedStyle(menuScrim).display === 'block' && getComputedStyle(menuScrim).pointerEvents === 'auto'
@@ -1609,6 +1802,16 @@
             const ico = t.querySelector('.ico')
             return ico && ico.textContent.trim() && t.style.getPropertyValue('--tint')
           })
+          // 目录页可滚动：items 的 min-height 必须为 0，否则 flex 子项撑到内容高度，
+          // overflow-y:auto 不触发滚动，超出菜单的部分就被裁（用户报的"显示不全"）
+          const scrollOk = getComputedStyle(actionMenuItems).minHeight === '0px' &&
+            getComputedStyle(actionMenuItems).overflowY === 'auto'
+          // 宫格等宽等高：所有 group-tile 的宽/高一致，长名字不撑破列（用户报的"大小不一样"）
+          const tileGeoOk = tiles.length >= 2 && (() => {
+            const ws = tiles.map((t) => t.getBoundingClientRect().width)
+            const hs = tiles.map((t) => t.getBoundingClientRect().height)
+            return Math.max(...ws) - Math.min(...ws) < 1 && Math.max(...hs) - Math.min(...hs) < 1
+          })()
           // 点第一个分组块 → 进入组内页（宫格内容）
           if (tiles[0]) tiles[0].click()
           const gridBody = actionMenuItems.querySelector('.action-group-body.grp-grid')
@@ -1639,7 +1842,7 @@
           const backBtn = actionMenuItems.querySelector('[data-action="__more-back__"]')
           if (backBtn) backBtn.click()
           const backToIndexOk = menuPage === 'more' && actionMenuItems.querySelectorAll('.group-tile').length === 2
-          const moreOk = indexGridOk && tileTintOk && groupPageOk && grpInfoOk && gridFitOk && backToIndexOk
+          const moreOk = indexGridOk && tileTintOk && scrollOk && tileGeoOk && groupPageOk && grpInfoOk && gridFitOk && backToIndexOk
           // 翻回主页面
           showMainPage()
           const backOk = actionMenuItems.querySelector('[data-action="__more__"]') != null
@@ -1668,6 +1871,8 @@
             moreOk,
             indexGridOk,
             tileTintOk,
+            scrollOk,
+            tileGeoOk,
             groupPageOk,
             grpInfoOk,
             gridFitOk,
@@ -1689,6 +1894,102 @@
               : { error: 'slingshot 模块未加载' }
         } catch (e) {
           gameProbe = { error: String((e && e.message) || e) }
+        }
+
+        // 新素材玩法：梗图配图能挂上 pet:// URL、睡觉序列能进 sleeping 态再醒来
+        let newMediaProbe
+        try {
+          onMeme({ url: 'pet://memes/' + encodeURIComponent('压力一只大肥鱼.png'), line: '探针' })
+          const memeImgOk =
+            !!bubbleImg &&
+            bubbleImg.style.display === 'block' &&
+            /^pet:\/\/memes\//.test(bubbleImg.getAttribute('src') || '')
+          const memeLineOk = bubbleText.textContent === '探针'
+          hideBubble()
+
+          onSleep({ start: '睡觉-开始', loop: '睡觉-循环', end: '睡觉-起来', lines: ['Zzz'], wakeLine: '醒了' })
+          const sleepOn = sleeping === true && document.body.classList.contains('sleeping')
+          doWakeAnim({ end: '睡觉-起来', wakeLine: '醒了' })
+          const wakeOk = sleeping === false && !document.body.classList.contains('sleeping')
+
+          // 白饭演出：走分镜分支，确认没被当成单段"吃白饭"
+          let feastOk = true
+          const origPlay = typeof play === 'function'
+          onFeast({ food: '吃白饭', fullness: 80, line: '探针开饭' })
+          feastOk = origPlay && manualUntil > Date.now()
+          hideBubble()
+
+          newMediaProbe = {
+            memeImgOk,
+            memeLineOk,
+            sleepOn,
+            wakeOk,
+            feastOk,
+            petProtocolOk: /^pet:\/\//.test(bubbleImg ? 'pet://x' : ''),
+          }
+        } catch (e) {
+          newMediaProbe = { error: String((e && e.message) || e) }
+        }
+
+        // 动作库：既要能点播，又要是独立页（不再平铺进更多页导致又乱又出画）
+        let animLibProbe
+        try {
+          const probeAnim = (boot.assets || []).find((a) => a === '照镜子') || (boot.assets || [])[0]
+          // (1) 点播链：带 anim 的项点击后直接 playByName，src 切到该动画
+          const fake = makeItem({ action: '', ico: '▶', tint: '#378add', txt: '探针动画', anim: probeAnim }, 0, true)
+          fake.click()
+          const playedName = nameOf(vids[active].src)
+
+          // (2) 动作库独立页：喂假分类数据同步渲染，验证它占据独立的 more 页而非平铺在更多页
+          openActionMenu()
+          const fakeLib = [
+            { title: '待机动作', icon: '🎬', tint: '#378add', items: [{ ico: '▶', tint: '#378add', txt: probeAnim, anim: probeAnim }] },
+            { title: '趣味动作', icon: '🎬', tint: '#2a9d8f', items: [{ ico: '▶', tint: '#2a9d8f', txt: probeAnim, anim: probeAnim }] },
+            { title: '特殊时刻', icon: '🎬', tint: '#7b6cd4', items: [{ ico: '▶', tint: '#7b6cd4', txt: probeAnim, anim: probeAnim }] },
+          ]
+          renderMoreIndex(fakeLib, 'animlib')
+          const libPageOk =
+            menuPage === 'more' && groupBackSource === 'animlib' && /动作库/.test(actionMenuTitle.textContent)
+          const libTiles = actionMenuItems.querySelectorAll('.group-tile').length
+          const libBack = !!actionMenuItems.querySelector('[data-action="__animlib-back__"]')
+          // (3) 点分类进组内 → 动画项可见 → 点返回回到动作库目录
+          const firstTile = actionMenuItems.querySelector('.group-tile')
+          if (firstTile) firstTile.click()
+          const inGroup = menuPage === 'group' && groupBackSource === 'animlib'
+          const groupAnimBtns = actionMenuItems.querySelectorAll('.action-group-body .action-item')
+          const groupBack = actionMenuItems.querySelector('[data-action="__more-back__"]')
+          if (groupBack) groupBack.click()
+          const backToLib =
+            menuPage === 'more' && groupBackSource === 'animlib' &&
+            !!actionMenuItems.querySelector('[data-action="__animlib-back__"]')
+
+          // (4) 更多页的动作库 tile 带 jump 标记 → 点一下直达分类页，
+          // 不再落进只有单个「播放全部动作」按钮的组内页那一级。
+          // 放在所有 DOM 读取之后：showAnimLibPage 内部有异步 IPC，避免它覆盖上面的断言。
+          renderMoreIndex([{ title: '动作库', icon: '🎬', tint: '#7b6cd4', jump: 'animlib' }])
+          const jumpTile = actionMenuItems.querySelector('.group-tile')
+          const jumpTileOk = !!jumpTile
+          if (jumpTile) jumpTile.click()
+          const jumpNoGroupPage = menuPage !== 'group'
+
+          closeActionMenu()
+
+          animLibProbe = {
+            hasAnimField: !!probeAnim,
+            played: playedName === probeAnim,
+            playedName,
+            want: probeAnim,
+            libPageOk,
+            libTiles,
+            libBack,
+            inGroup,
+            groupHasItems: groupAnimBtns.length > 0,
+            backToLib,
+            jumpTileOk,
+            jumpNoGroupPage,
+          }
+        } catch (e) {
+          animLibProbe = { error: String((e && e.message) || e) }
         }
 
         const hr = hit.getBoundingClientRect()
@@ -1738,6 +2039,8 @@
           crawl: crawlProbe,
           actionMenu: menuProbe,
           game: gameProbe,
+          newMedia: newMediaProbe,
+          animLib: animLibProbe,
         }
       } catch (e) {
         probe = { error: String((e && e.message) || e) }

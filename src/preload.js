@@ -13,7 +13,11 @@ contextBridge.exposeInMainWorld('petAPI', {
   menuOpen: () => ipcRenderer.send('pet:menu-open'),
   menuClose: () => ipcRenderer.send('pet:menu-close'),
   menuData: () => ipcRenderer.invoke('pet:menu-data'),
+  animLibData: () => ipcRenderer.invoke('pet:animlib-data'),
   action: (name) => ipcRenderer.send('pet:action', name),
+  // 气泡配图（梗图/睡觉碗图）需要临时扩窗才能完整显示，显示前后通知主进程
+  picOpen: () => ipcRenderer.send('pet:pic-open'),
+  picClose: () => ipcRenderer.send('pet:pic-close'),
   gameOpen: () => ipcRenderer.send('pet:game-open'),
   gameClose: () => ipcRenderer.send('pet:game-close'),
   // 弹弓瞄准弹道：渲染层算好相对窗口的抛物线点，主进程换算成屏幕坐标画到目标层
@@ -27,6 +31,10 @@ contextBridge.exposeInMainWorld('petAPI', {
       'pet:state',
       'pet:poke',
       'pet:feed',
+      'pet:sleep',
+      'pet:wake',
+      'pet:meme',
+      'pet:pic',
       'pet:mood',
       'pet:liedown',
       'pet:stuck',

@@ -34,6 +34,7 @@ const MENU_ACTIONS = [
   'openWorkBuddy', 'openCursor', 'openCwdCursor', 'openCwdTerminal', 'openCwdFinder', // 打开
   'digest', 'replayEvolve', // 查看/回看
   'game', // 弹弓弹射小游戏
+  'sleep', 'wake', 'feast', 'meme', // 新素材玩法：睡觉 / 叫醒 / 白饭演出 / 梗图
 ]
 
 protocol.registerSchemesAsPrivileged([
@@ -692,10 +693,17 @@ function moodMenuItems() {
   return items
 }
 
-// 喂点东西：互动操作，留在顶层。饱腹度关掉时返回空数组（展开运算符会吃掉）
-// 喂一口：抽成 doFeed() 供原生菜单和自绘气泡菜单共用
+// 喂一口：抽成 doFeed() 供原生菜单和自绘气泡菜单共用。
+// 原「喂一口」和「喂白饭」都是喂食、功能重复，已合并：点「喂一口」多数时候
+// 是快速单段（随机食物），偶尔（FEAST_CHANCE）触发白饭的完整分镜演出——
+// 这样一个入口覆盖两种体验，白饭 4 段素材和碗图也照用，不浪费。
+const FEAST_CHANCE = 0.3
 function doFeed() {
   if (feed.fullness(cfg) == null) return
+  if (Math.random() < FEAST_CHANCE) {
+    doFeast()
+    return
+  }
   const food = feed.pickFood(cfg)
   const r = feed.feed(cfg, food)
   if (!r || !win) return
@@ -717,6 +725,76 @@ function feedMenuItems() {
     ? `喂点东西（今天${occasion}，想吃${food.replace(/^吃/, '')}）`
     : `喂点东西（现在想吃${food.replace(/^吃/, '')}）`
   return [{ label, click: doFeed }]
+}
+
+// ---- 新素材玩法（来自 dsh-pet 的睡觉 / 白饭演出 / 梗图） ----
+
+// 睡觉：三段序列（躺下 → 循环 → 起来）由渲染层串起来播，这里只发一次指令。
+// 睡着了再点它会被渲染层拦下来（先"嘘"一句），点菜单的"叫醒"才真叫醒。
+let sleepingNow = false
+function doSleep() {
+  if (!win || win.isDestroyed()) return
+  if (sleepingNow) return
+  sleepingNow = true
+  stopCrawlIfOn()
+  win.webContents.send('pet:sleep', {
+    start: '睡觉-开始',
+    loop: '睡觉-循环',
+    end: '睡觉-起来',
+    lines: ['困了…我先眯一会儿 Zzz', '别吵，梦到吃白饭了…', '呼…呼…'],
+    wakeLine: '唔…睡饱啦~',
+  })
+  sfx.click(cfg, true)
+}
+function doWake() {
+  if (!sleepingNow) {
+    doSleep()
+    return
+  }
+  win.webContents.send('pet:wake')
+}
+function clearSleep() {
+  sleepingNow = false
+}
+
+// 白饭演出：开心小跑 → 期待开饭 → 吃到碗饭/吃饭团，配碗图。
+// 跟普通"喂一口"不同，这是完整一整套分镜演出，用新下载的四段素材。
+function doFeast() {
+  if (!win || win.isDestroyed()) return
+  stopCrawlIfOn()
+  if (feed.fullness(cfg) != null) feed.feed(cfg, '吃白饭') // 演出也算喂了一口
+  win.webContents.send('pet:feed', {
+    food: '吃白饭',
+    fullness: feed.fullness(cfg),
+    mood: feed.moodOf(cfg, feed.fullness(cfg)),
+    line: '开饭啦！今天也有好好吃饭~',
+    show: 'feast', // 渲染层据此走分镜演出，而不是单段"吃白饭"
+  })
+  bumpBond('feed')
+  sfx.click(cfg, true)
+}
+
+// 梗图：从 assets/memes 里随机抽一张，气泡里配图 + 一句应景的话。
+// 文件名（含中文）先 encodeURIComponent，pet:// 协议那边再 decode。
+const MEME_DIR = path.join(ASSETS_DIR, 'memes')
+function doMeme() {
+  if (!win || win.isDestroyed()) return
+  let names = []
+  try {
+    names = fs.readdirSync(MEME_DIR).filter((f) => /\.png$/i.test(f))
+  } catch (e) {
+    names = []
+  }
+  if (!names.length) return
+  const pickOne = names[Math.floor(Math.random() * names.length)]
+  const url = 'pet://memes/' + encodeURIComponent(pickOne)
+  const lines = ['发张图让你乐呵乐呵~', '你看这个，像不像加班的你', '斗图我可没怕过谁', '今日份表情包，收好~']
+  win.webContents.send('pet:meme', {
+    url,
+    name: pickOne.replace(/\.png$/i, ''),
+    line: lines[Math.floor(Math.random() * lines.length)],
+  })
+  sfx.click(cfg, true)
 }
 
 // 饱腹度只读展示，归到「状态」子菜单
@@ -866,7 +944,7 @@ async function showMenu() {
 // ===== 自绘气泡菜单：窗口临时向上扩展，给鱼头顶腾出放菜单的空间 =====
 // 鱼贴窗口底显示，所以只把「顶部往上顶 + 高度加大」，底边坐标不变 →
 // 鱼在屏幕上的位置一动不动，菜单浮层就长在原头顶那片空白里。
-const MENU_EXTRA_H = 380 // 菜单区额外高度：主页面 8 项，更多页靠浮层内滚动
+const MENU_EXTRA_H = 470 // 菜单区额外高度：主页面 12 项(4 行宫格)，更多页靠浮层内滚动
 let menuOrigBounds = null // 打开前的窗口 bounds，关闭时精确还原
 
 function expandForMenu() {
@@ -896,6 +974,40 @@ function restoreFromMenu() {
     console.error('[pet] 菜单恢复窗口失败：', e)
   }
 }
+
+// 气泡配图（384×384 方图）临时扩窗：鱼贴底不动，只把顶部往上顶，
+// 这样贴着鱼头顶的气泡有足够空间把整张图显示全，不会被窗口顶边裁掉。
+// 跟菜单扩窗分开记 bounds，互不干扰；图片消失后调 pet:pic-close 还原。
+const PIC_EXTRA_H = 340
+let picOrigBounds = null
+function expandForPic() {
+  if (SELFTEST) return // 自检不动窗口，免得干扰菜单/窗口断言
+  if (!win || win.isDestroyed()) return
+  if (menuOrigBounds) return // 菜单正开着，扩窗由菜单负责，别抢
+  if (picOrigBounds) return // 已经扩过
+  const b = win.getBounds()
+  picOrigBounds = b
+  const wa = screen.getDisplayMatching(b).workArea
+  const bottom = b.y + b.height
+  const newTop = Math.max(wa.y, b.y - PIC_EXTRA_H)
+  try {
+    win.setBounds({ x: b.x, y: newTop, width: b.width, height: bottom - newTop })
+  } catch (e) {
+    console.error('[pet] 配图扩窗失败：', e)
+  }
+}
+function restoreFromPic() {
+  if (!win || win.isDestroyed() || !picOrigBounds) return
+  const b = picOrigBounds
+  picOrigBounds = null
+  try {
+    win.setBounds(b)
+  } catch (e) {
+    console.error('[pet] 配图恢复窗口失败：', e)
+  }
+}
+ipcMain.on('pet:pic-open', expandForPic)
+ipcMain.on('pet:pic-close', restoreFromPic)
 
 // ---- 弹弓模式 ----
 // 弹射的就是这只真桌宠窗口本身：不扩窗、不隐藏鱼，渲染层只叠一根弹弓 HUD。
@@ -1354,6 +1466,18 @@ function dispatchMenuAction(action) {
       else closeTargetLayer()
       if (win && !win.isDestroyed()) win.webContents.send('pet:open-game', { on: slingshotMode })
       break
+    case 'sleep':
+      doSleep()
+      break
+    case 'wake':
+      doWake()
+      break
+    case 'feast':
+      doFeast()
+      break
+    case 'meme':
+      doMeme()
+      break
     case 'quit':
       app.quit()
       return
@@ -1399,6 +1523,14 @@ function buildActionMenuData() {
   if (evS.enabled && evS.unlocked) view.push({ ico: '👀', tint: '#7b6cd4', txt: '回看当前形态', action: 'replayEvolve' })
   if (view.length) groups.push({ title: '看看', icon: '👀', tint: '#7b6cd4', layout: 'grid', items: view })
 
+  // 玩点别的：新下载的睡觉 / 梗图素材。白饭演出已并入「喂一口」的随机分支，
+  // 不再单列入口（原来和「喂一口」功能重复）。
+  const playGrp = [
+    { ico: sleepingNow ? '🌅' : '😴', tint: '#7b6cd4', txt: sleepingNow ? '叫醒它' : '哄它睡觉', hint: sleepingNow ? '醒来啦' : '三段睡觉动画', action: sleepingNow ? 'wake' : 'sleep' },
+    { ico: '🖼️', tint: '#e0679a', txt: '斗张图', hint: '随机表情包', action: 'meme' },
+  ]
+  groups.push({ title: '玩点别的', icon: '🎲', tint: '#e0679a', layout: 'grid', items: playGrp })
+
   // 打开工具
   const open = [
     { ico: '🐟', tint: '#378add', txt: '打开 WorkBuddy', action: 'openWorkBuddy' },
@@ -1422,8 +1554,46 @@ function buildActionMenuData() {
   setting.push({ ico: '🔄', tint: '#7d8a99', txt: '重载配置', action: 'reload' })
   groups.push({ title: '设置', icon: '🎛️', tint: '#7d8a99', layout: 'grid', items: setting })
 
+  // 动作库入口：点这个 tile 直接跳到 11 个分类页（见 buildAnimLibMenuData）。
+  // jump 标记让渲染层跳过"组内页"那一级——之前套了个只有「播放全部动作」的
+  // 中间页，等于多点一下才能看到分类，用户反馈多余（"加了一级播放全部动作"）。
+  groups.push({
+    title: '动作库',
+    icon: '🎬',
+    tint: '#7b6cd4',
+    layout: 'grid',
+    jump: 'animlib',
+  })
+
   groups.push({ title: '', icon: '🚪', tint: '#c0392b', layout: 'grid', items: [{ ico: '🚪', tint: '#c0392b', txt: '退出', action: 'quit', danger: true }] })
   return groups
+}
+
+// 动作库页数据：全部动画素材按分类分组，item 带 anim，渲染层点击直接 playByName。
+// 从 buildActionMenuData 拆出来，让「更多」页只保留一个入口，分类在独立页里展示。
+function buildAnimLibMenuData() {
+  const acts = []
+  if (pools) {
+    const ACT_TINTS = ['#378add', '#2a9d8f', '#7b6cd4', '#e0679a', '#4c9e6a', '#b8860b', '#e08a3c', '#7d8a99']
+    ;(menuGroups(pools, cfg) || []).forEach((g, gi) => {
+      const items = (g.items || []).map((it, ii) => ({
+        ico: '▶',
+        tint: ACT_TINTS[(gi + ii) % ACT_TINTS.length],
+        txt: it.label,
+        anim: it.name,
+      }))
+      if (items.length) {
+        acts.push({
+          title: g.label,
+          icon: '🎬',
+          tint: ACT_TINTS[gi % ACT_TINTS.length],
+          layout: 'grid',
+          items,
+        })
+      }
+    })
+  }
+  return acts
 }
 
 let lastCwd = ''
@@ -1623,12 +1793,35 @@ app.whenReady().then(() => {
   cfg = loadConfig()
   sfx.warmup(cfg) // 异步探一次 python，别等到第一次播报才同步阻塞
 
+  // pet:// 资源协议：按路径前缀分流到不同素材目录。
+  //   pet://吃白饭.webm        → assets/webm/（动画，原样兼容）
+  //   pet://pic/notify-done.png→ assets/pic/（通知配图 / 拖拽指针）
+  //   pet://pic/baifan/*.png   → assets/pic/baifan/（白饭碗）
+  //   pet://memes/xxx.png      → assets/memes/（梗图）
+  // 只从 ASSETS_DIR 下读，路径穿越（..）直接拒掉。
   protocol.handle('pet', async (req) => {
     try {
-      const name = decodeURIComponent(req.url.replace(/^pet:\/*/i, ''))
-      const file = path.join(ASSETS_DIR, 'webm', name)
+      const rel = decodeURIComponent(req.url.replace(/^pet:\/*/i, ''))
+      let dir = 'webm'
+      let name = rel
+      const slash = rel.indexOf('/')
+      if (slash >= 0) {
+        const head = rel.slice(0, slash)
+        if (head === 'pic' || head === 'memes') {
+          dir = head
+          name = rel.slice(slash + 1)
+        }
+      }
+      // 解析后必须仍在 ASSETS_DIR 内，挡住 .. 穿越
+      const base = path.resolve(ASSETS_DIR, dir)
+      const file = path.resolve(base, name)
+      if (file !== base && !file.startsWith(base + path.sep)) {
+        return new Response('forbidden', { status: 403 })
+      }
       const buf = await fs.promises.readFile(file)
-      return new Response(buf, { headers: { 'Content-Type': 'video/webm' } })
+      const ext = path.extname(file).toLowerCase()
+      const type = ext === '.png' ? 'image/png' : ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' : 'video/webm'
+      return new Response(buf, { headers: { 'Content-Type': type } })
     } catch {
       return new Response('not found', { status: 404 })
     }
@@ -1672,6 +1865,7 @@ app.whenReady().then(() => {
     const dy = Number(rawDy)
     if (!Number.isFinite(dx) || !Number.isFinite(dy)) return
     if (crawlerOn) stopCrawl() // 用户开始拖 = 手动接管，停下巡游
+    if (sleepingNow) { clearSleep(); win && win.webContents.send('pet:wake') } // 拖动 = 起床
     stopFlight()
     if (!win || win.isDestroyed()) return
     const [x, y] = win.getPosition()
@@ -1926,6 +2120,64 @@ app.whenReady().then(() => {
             typeof expandForMenu === 'function' &&
             typeof restoreFromMenu === 'function' &&
             MENU_EXTRA_H > 0,
+          // 动作库：更多页只留单一入口（不再平铺 11 组，否则又乱又出画），
+          // 点进去由 buildAnimLibMenuData 提供全部分类，每类带 anim 点播项。
+          animLibOk: (() => {
+            const more = buildActionMenuData()
+            const hasEntry = more.some((g) => g.jump === 'animlib')
+            // 更多页不应再有平铺的动画组（标题以 ▶ 开头）——那正是"菜单太乱"的元凶
+            const noFlat = !more.some((g) => String(g.title || '').startsWith('▶'))
+            const lib = buildAnimLibMenuData()
+            const animItems = lib.reduce((n, g) => n + (g.items || []).filter((it) => it.anim).length, 0)
+            return (
+              hasEntry && noFlat && lib.length >= 5 && animItems >= 80 &&
+              typeof expandForPic === 'function' && PIC_EXTRA_H > 0
+            )
+          })(),
+          animLibGroups: buildAnimLibMenuData().length,
+          // 新素材玩法：睡觉三段 / 白饭演出四段 / 梗图 / 配图 / 抓手都在磁盘上，菜单动作也齐
+          newMediaOk: (() => {
+            const has = (p) => {
+              try {
+                return fs.statSync(path.join(ASSETS_DIR, p)).size > 0
+              } catch (e) {
+                return false
+              }
+            }
+            const webms = ['睡觉-开始', '睡觉-循环', '睡觉-起来', '开心小跑', '侧身急躁跑', '期待开饭', '吃饭·碗饭', '吃饭团']
+            const pics = ['pic/cursor-grab.png', 'pic/cursor-grabbing.png', 'pic/baifan/bowl-full.png', 'pic/baifan/bowl-empty.png', 'pic/sleep-zzz.png']
+            let memes = []
+            try {
+              memes = fs.readdirSync(MEME_DIR).filter((f) => /\.png$/i.test(f))
+            } catch (e) {}
+            return (
+              webms.every((n) => has(path.join('webm', n + '.webm'))) &&
+              pics.every(has) &&
+              memes.length >= 20 &&
+              ['sleep', 'wake', 'feast', 'meme'].every((a) => MENU_ACTIONS.includes(a)) &&
+              buildActionMenuData().some((g) => g.title === '玩点别的')
+            )
+          })(),
+          newMediaMemeCount: (() => {
+            try {
+              return fs.readdirSync(MEME_DIR).filter((f) => /\.png$/i.test(f)).length
+            } catch (e) {
+              return 0
+            }
+          })(),
+          // 喂食去重：「喂白饭」不再单列入菜单，改为「喂一口」按概率触发的演出分支。
+          // 校验：①菜单各分组里没有 action==='feast' 的入口 ②feast 动作仍在清单(doFeed 内部要用)
+          // ③白饭演出函数还在、概率在 (0,1) 区间——素材和演出逻辑都没丢。
+          feedMergedOk: (() => {
+            const more = buildActionMenuData()
+            const noFeastTile = !more.some((g) => (g.items || []).some((it) => it.action === 'feast'))
+            return (
+              noFeastTile &&
+              MENU_ACTIONS.includes('feast') &&
+              typeof doFeast === 'function' &&
+              FEAST_CHANCE > 0 && FEAST_CHANCE < 1
+            )
+          })(),
           // 弹弓模式：弹射真窗——动作就位 + 复用真抛掷(startFlight) + 尺寸常量与模式位
           gameOk:
             MENU_ACTIONS.includes('game') &&
@@ -2115,6 +2367,8 @@ app.whenReady().then(() => {
   })
   // 气泡菜单「更多」子页数据（同步生成，invoke 返回给渲染层渲染）
   ipcMain.handle('pet:menu-data', () => buildActionMenuData())
+  // 动作库页数据：11 个动画分类。渲染层点进「动作库」入口时才取，避免每次开菜单白造一份
+  ipcMain.handle('pet:animlib-data', () => buildAnimLibMenuData())
   // 气泡菜单项点击：主进程统一分发，执行后收起菜单还原窗口
   ipcMain.on('pet:action', (_e, action) => {
     dispatchMenuAction(action)

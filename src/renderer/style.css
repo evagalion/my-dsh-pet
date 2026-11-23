@@ -34,6 +34,17 @@ body {
   height: 52%;
   border-radius: 48% 48% 30% 30% / 38% 38% 22% 22%;
   pointer-events: auto;
+  /* 自定义抓手光标（来自 dsh-pet）：手图标 + 标准 grab 兜底，hotspot 取图片中心 */
+  cursor: url('pet://pic/cursor-grab.png') 16 16, grab;
+}
+/* 拖拽中换成"抓住"的手 */
+body.dragging #hit {
+  cursor: url('pet://pic/cursor-grabbing.png') 16 16, grabbing;
+}
+/* 睡觉态：鱼微微变暗，暗示在休息 */
+body.sleeping #stage {
+  filter: brightness(0.88) saturate(0.85);
+  transition: filter 0.5s ease;
 }
 
 /* 鼠标穿透开启时鱼淡一点，不然整窗透明、也不响应鼠标，开了跟没开看不出区别 */
@@ -112,6 +123,18 @@ body.through #stage {
 .bubble.show {
   opacity: 1;
   transform: translateX(-50%) translateY(0);
+}
+
+/* 气泡配图：梗图 / 睡觉配图 / 白饭碗图。限制尺寸别撑爆小窗口，圆角跟气泡一致 */
+.bubble-img {
+  display: none;
+  width: auto;
+  max-width: 210px;
+  max-height: 190px;
+  height: auto;
+  margin: 4px auto 2px;
+  border-radius: 8px;
+  object-fit: contain;
 }
 
 /* 小纸条：递关怀时把气泡换成一张淡黄便签，顶上贴条"胶带"，右下角折角 */
@@ -306,6 +329,10 @@ body.menu-open .pet.show {
   gap: 5px;
   overflow-y: auto;
   overflow-x: hidden;
+  /* 关键：.action-menu 是 flex column 且有 max-height，flex 子项默认 min-height:auto
+     会撑到内容高度，导致 overflow-y:auto 不触发滚动、超出部分被裁（"显示不全"）。
+       min-height:0 允许子项收缩到容器高度内，滚动才真正生效。 */
+  min-height: 0;
   pointer-events: auto;
   scrollbar-width: thin;
   scrollbar-color: rgba(55, 138, 221, 0.35) transparent;
@@ -382,12 +409,18 @@ body.menu-open .pet.show {
   transform: scale(0.94);
 }
 
-/* ===== 更多页·目录：分组块也用宫格，和主菜单同一套视觉 ===== */
+/* ===== 目录页（更多/动作库）：分组块用宫格，和主菜单同一套视觉 =====
+   可滚动而非 visible——过去目录页平铺太多块，超出菜单就再也看不到（用户报的
+   "有的选项不可见"）。现在拆出独立动作库页 + 这里允许滚动，双保险。 */
 .action-menu.page-more:not(.page-more-group) .action-menu-items {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  /* minmax(0,1fr) 而非 1fr：1fr=minmax(auto,1fr) 会被长分类名（如"特殊时刻（平时不自动播）"）
+     顶宽，导致各列宽度不一。minmax(0,1fr) 强制等宽，配合文字换行截断，宫格大小一致。 */
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  align-content: start;
   gap: 7px;
-  overflow: visible;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 /* 返回行独占整行（宫格里不按格子排） */
 .action-menu.page-more:not(.page-more-group) .action-menu-items > .action-item:first-child {
@@ -402,27 +435,40 @@ body.menu-open .pet.show {
   height: 26px;
   font-size: 14px;
 }
-/* 分组块：竖排图标+文字，宫格视觉 */
+/* 分组块：竖排图标+文字，宫格视觉。固定最小高度 + min-width:0，长短名字一样大。 */
 .action-menu.page-more:not(.page-more-group) .group-tile {
   flex-direction: column;
   justify-content: center;
+  align-items: center;
   gap: 5px;
-  padding: 12px 2px 10px;
+  min-width: 0;
+  min-height: 74px;
+  padding: 9px 3px 8px;
   border-radius: 13px;
   text-align: center;
   box-shadow: none;
+  overflow: hidden;
 }
 .action-menu.page-more:not(.page-more-group) .group-tile .ico {
-  width: 38px;
-  height: 38px;
-  border-radius: 12px;
-  font-size: 19px;
+  flex: none;
+  width: 34px;
+  height: 34px;
+  border-radius: 11px;
+  font-size: 17px;
 }
+/* 文字可换行、最多 2 行超出省略——分类名长短不一也能保持宫格等高、不撑破列宽 */
 .action-menu.page-more:not(.page-more-group) .group-tile .txt {
   flex: none;
+  width: 100%;
+  min-width: 0;
   font-size: 11px;
-  line-height: 1.2;
-  white-space: nowrap;
+  line-height: 1.25;
+  white-space: normal;
+  word-break: break-word;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
 }
 .action-menu.page-more:not(.page-more-group) .group-tile:active {
   transform: scale(0.94);
