@@ -2611,6 +2611,21 @@ app.whenReady().then(() => {
       require('node:fs').appendFileSync('/tmp/pet-input.log', JSON.stringify({ t: Date.now(), ...data }) + '\n')
     } catch {}
   })
+  // 画面看门狗诊断：无条件记录渲染层每次检查到的 video 状态到 userData/watchdog.log。
+  // 只保留最近 400 行，避免长期运行把文件撑大。
+  ipcMain.on('pet:diag', (_e, data) => {
+    try {
+      const fs = require('node:fs')
+      const f = require('node:path').join(app.getPath('userData'), 'watchdog.log')
+      let line = JSON.stringify({ t: Date.now(), ...data }) + '\n'
+      try {
+        const prev = fs.readFileSync(f, 'utf8').split('\n').filter(Boolean)
+        if (prev.length > 400) line = prev.slice(-399).join('\n') + '\n' + line
+        else if (prev.length) line = prev.join('\n') + '\n' + line
+      } catch (e) {}
+      fs.writeFileSync(f, line)
+    } catch (e) {}
+  })
   ipcMain.on('pet:drag-end', () => persistPosition())
   // 点一下鱼身：播随机点击音效。渲染层已经判过「没拖动」了，这里只管出声
   ipcMain.on('pet:click', () => {

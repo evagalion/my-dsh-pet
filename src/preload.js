@@ -26,6 +26,7 @@ contextBridge.exposeInMainWorld('petAPI', {
   walk: (dist, ms) => ipcRenderer.send('pet:walk', dist, ms),
   selftest: (data) => ipcRenderer.send('pet:selftest', data),
   debug: (data) => ipcRenderer.send('pet:debug', data),
+  diag: (data) => ipcRenderer.send('pet:diag', data),
   on: (channel, fn) => {
     const valid = [
       'pet:state',

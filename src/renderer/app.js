@@ -285,45 +285,96 @@
   // 只读 currentTime/src，不抓帧（GPU 失效时 canvas 抓帧本身也不可靠）。
   let watchdogLastTime = -1
   let watchdogStall = 0
+  let watchdogBlank = 0
+  const diag = (d) => { try { if (api.diag) api.diag(d) } catch (e) {} }
+  // 抓当前显示 video 的一帧，估算非透明像素占比。素材是带 alpha 的 webm，
+  // 正常帧里角色占 10%~35%；如果低于 2% 基本就是空白帧（合成/解码出了问题）。
+  function frameCoverage(v) {
+    try {
+      if (!v || v.readyState < 2 || !v.videoWidth) return -1
+      const c = document.createElement('canvas')
+      c.width = 64
+      c.height = 36
+      const ctx = c.getContext('2d', { willReadFrequently: true })
+      ctx.drawImage(v, 0, 0, c.width, c.height)
+      const d = ctx.getImageData(0, 0, c.width, c.height).data
+      let nonEmpty = 0
+      const total = c.width * c.height
+      for (let i = 3; i < d.length; i += 4) if (d[i] > 12) nonEmpty++
+      return nonEmpty / total
+    } catch (e) {
+      return -1
+    }
+  }
   function startWatchdog() {
+    diag({ ev: 'start', ua: navigator.userAgent.slice(0, 60) })
+    const revive = (why) => {
+      diag({ ev: 'revive', why })
+      const shown = vids.find((v) => v.classList.contains('show')) || vids[active]
+      const src = shown && shown.src
+      watchdogStall = 0
+      watchdogBlank = 0
+      watchdogLastTime = -1
+      if (src) {
+        // 换到另一条 video 播同一段：比原地重赋 src 更能强制重建合成层
+        const other = vids.find((v) => v !== shown)
+        if (other) {
+          const name = nameOf(src)
+          if (name) {
+            play(name, { onEnd: () => nextIdle() })
+            return
+          }
+        }
+        shown.src = ''
+        setTimeout(() => {
+          try {
+            shown.src = src
+            shown.currentTime = 0
+            const pr = shown.play()
+            if (pr && pr.catch) pr.catch(() => {})
+          } catch (e) {}
+        }, 60)
+      } else {
+        phase = 'idle'
+        nextIdle()
+      }
+    }
     const tick = () => {
       try {
         const shown = vids.find((v) => v.classList.contains('show'))
+        const cov = frameCoverage(shown)
+        const info = {
+          ev: 'tick',
+          aShow: vids[0].classList.contains('show'),
+          bShow: vids[1].classList.contains('show'),
+          shown: shown ? shown.id : null,
+          t: shown ? Number(shown.currentTime || 0).toFixed(1) : null,
+          paused: shown ? shown.paused : null,
+          ready: shown ? shown.readyState : null,
+          src: shown ? nameOf(shown.src).slice(0, 20) : null,
+          cov: cov < 0 ? -1 : Number(cov.toFixed(3)),
+          stall: watchdogStall,
+          blank: watchdogBlank,
+        }
+        diag(info)
         if (!shown) {
           // 一条都没在显示 = 异常空白，立刻拉回待机链重新出画面
-          watchdogStall = 0
-          watchdogLastTime = -1
-          phase = 'idle'
-          nextIdle()
-        } else if (!shown.paused && shown.readyState >= 2) {
+          revive('no-show')
+        } else {
           const t = Number(shown.currentTime) || 0
-          // 播放中却连续多次 currentTime 不动 = 播放/解码卡死
-          if (Math.abs(t - watchdogLastTime) < 0.05) watchdogStall++
+          if (!shown.paused && Math.abs(t - watchdogLastTime) < 0.05) watchdogStall++
           else watchdogStall = 0
           watchdogLastTime = t
-          if (watchdogStall >= 3) {
-            // 强制重播当前这一段：重新赋 src 逼浏览器重新解码、重建合成层
-            const src = shown.src
-            watchdogStall = 0
-            watchdogLastTime = -1
-            if (src) {
-              shown.src = ''
-              // 下一帧再设回去，确保走一次完整的加载流程
-              setTimeout(() => {
-                try {
-                  shown.src = src
-                  shown.currentTime = 0
-                  const pr = shown.play()
-                  if (pr && pr.catch) pr.catch(() => {})
-                } catch (e) {}
-              }, 60)
-            } else {
-              phase = 'idle'
-              nextIdle()
-            }
+          // 画面覆盖率连续偏低 = 空白帧（合成/解码不出画面）
+          if (cov >= 0 && cov < 0.02) watchdogBlank++
+          else watchdogBlank = 0
+          if (watchdogStall >= 3 || watchdogBlank >= 2) {
+            revive(watchdogBlank >= 2 ? 'blank-frame' : 'stalled')
           }
         }
-      } catch (e) {}
+      } catch (e) {
+        diag({ ev: 'error', msg: String((e && e.message) || e) })
+      }
       setTimeout(tick, 6000)
     }
     setTimeout(tick, 6000)
