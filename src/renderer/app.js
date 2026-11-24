@@ -277,6 +277,58 @@
     play(pickWeighted(), {})
   }
 
+  // 画面看门狗：打包版偶发「只剩气泡、鱼不见」的兜底自愈。
+  // 现象是渲染/DOM 都正常（气泡在、video 有 .show、readyState=4），但屏幕上 video 层
+  // 不再出画面——多和透明窗口的视频合成/解码卡死有关，JS 层抓不到具体异常。
+  // 策略：盯两个可靠的信号——(1) 当前显示的 video currentTime 卡住不动；(2) 两个
+  // video 都没在显示。命中就强制重播当前素材（重新设 src 触发解码+合成），让鱼回来。
+  // 只读 currentTime/src，不抓帧（GPU 失效时 canvas 抓帧本身也不可靠）。
+  let watchdogLastTime = -1
+  let watchdogStall = 0
+  function startWatchdog() {
+    const tick = () => {
+      try {
+        const shown = vids.find((v) => v.classList.contains('show'))
+        if (!shown) {
+          // 一条都没在显示 = 异常空白，立刻拉回待机链重新出画面
+          watchdogStall = 0
+          watchdogLastTime = -1
+          phase = 'idle'
+          nextIdle()
+        } else if (!shown.paused && shown.readyState >= 2) {
+          const t = Number(shown.currentTime) || 0
+          // 播放中却连续多次 currentTime 不动 = 播放/解码卡死
+          if (Math.abs(t - watchdogLastTime) < 0.05) watchdogStall++
+          else watchdogStall = 0
+          watchdogLastTime = t
+          if (watchdogStall >= 3) {
+            // 强制重播当前这一段：重新赋 src 逼浏览器重新解码、重建合成层
+            const src = shown.src
+            watchdogStall = 0
+            watchdogLastTime = -1
+            if (src) {
+              shown.src = ''
+              // 下一帧再设回去，确保走一次完整的加载流程
+              setTimeout(() => {
+                try {
+                  shown.src = src
+                  shown.currentTime = 0
+                  const pr = shown.play()
+                  if (pr && pr.catch) pr.catch(() => {})
+                } catch (e) {}
+              }, 60)
+            } else {
+              phase = 'idle'
+              nextIdle()
+            }
+          }
+        }
+      } catch (e) {}
+      setTimeout(tick, 6000)
+    }
+    setTimeout(tick, 6000)
+  }
+
   const clip = (s, n) => {
     s = String(s || '')
     return s.length > n ? s.slice(0, n - 1) + '…' : s
@@ -2109,6 +2161,8 @@
 
     const first = rand(pool.idle) || rand(pool.fun) || (boot.assets || [])[0]
     play(first, {})
+    // 画面看门狗只在真实运行时开（自检模式不动，免得干扰 probe 的确定性断言）
+    if (!boot.selftest) startWatchdog()
     const v = vids[active]
     v.addEventListener('playing', () => selftestReport(boot, { playing: true, probe }), { once: true })
     v.addEventListener('error', () => selftestReport(boot, { playing: false, err: 'media error', probe }), {
