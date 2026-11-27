@@ -27,6 +27,7 @@ const evolve = require('./evolve')
 const snark = require('./snark')
 const music = require('./music')
 const aquarium = require('./aquarium')
+const heapguard = require('./heapguard')
 
 const pick = (arr) => (arr && arr.length ? arr[Math.floor(Math.random() * arr.length)] : null)
 
@@ -2617,7 +2618,7 @@ app.whenReady().then(() => {
     try {
       const fs = require('node:fs')
       const f = require('node:path').join(app.getPath('userData'), 'watchdog.log')
-      let line = JSON.stringify({ t: Date.now(), ...data }) + '\n'
+      let line = JSON.stringify({ ...data, ts: Date.now() }) + '\n'
       try {
         const prev = fs.readFileSync(f, 'utf8').split('\n').filter(Boolean)
         if (prev.length > 400) line = prev.slice(-399).join('\n') + '\n' + line
@@ -2804,6 +2805,12 @@ app.whenReady().then(() => {
   }
   tick()
   setInterval(tick, cfg.pollIntervalMs)
+
+  // 内存自监控 + 保守自动回收：自检模式不启动，免得干扰 probe / 误重启
+  if (!SELFTEST) {
+    try { heapguard.createGuard(() => app.getPath('userData')).start() } catch (e) {}
+  }
+
   watcher.watch((s) => pushState(s))
 
   app.on('activate', () => {
