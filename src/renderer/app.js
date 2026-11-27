@@ -289,20 +289,32 @@
   const diag = (d) => { try { if (api.diag) api.diag(d) } catch (e) {} }
   // 抓当前显示 video 的一帧，估算非透明像素占比。素材是带 alpha 的 webm，
   // 正常帧里角色占 10%~35%；如果低于 2% 基本就是空白帧（合成/解码出了问题）。
+  // 抓帧熔断：合成层失效时 drawImage(video) 会在 GPU 侧反复分配解码缓冲且不释放，
+  // 是 external 原生内存暴涨的疑似源头。复用同一张离屏 canvas，且连续抓帧失败
+  // 达到阈值后彻底停用抓帧，只靠 currentTime 判断卡死，避免持续喂 GPU。
+  let covCanvas = null
+  let covFailStreak = 0
+  const COV_MAX_FAIL = 4
   function frameCoverage(v) {
+    if (covFailStreak >= COV_MAX_FAIL) return 1 // 熔断后给中性值，让 blank 判定跳过
     try {
       if (!v || v.readyState < 2 || !v.videoWidth) return -1
-      const c = document.createElement('canvas')
-      c.width = 64
-      c.height = 36
-      const ctx = c.getContext('2d', { willReadFrequently: true })
-      ctx.drawImage(v, 0, 0, c.width, c.height)
-      const d = ctx.getImageData(0, 0, c.width, c.height).data
+      if (!covCanvas) {
+        covCanvas = document.createElement('canvas')
+        covCanvas.width = 64
+        covCanvas.height = 36
+      }
+      const ctx = covCanvas.getContext('2d', { willReadFrequently: true })
+      ctx.clearRect(0, 0, covCanvas.width, covCanvas.height)
+      ctx.drawImage(v, 0, 0, covCanvas.width, covCanvas.height)
+      const d = ctx.getImageData(0, 0, covCanvas.width, covCanvas.height).data
       let nonEmpty = 0
-      const total = c.width * c.height
+      const total = covCanvas.width * covCanvas.height
       for (let i = 3; i < d.length; i += 4) if (d[i] > 12) nonEmpty++
+      covFailStreak = 0
       return nonEmpty / total
     } catch (e) {
+      covFailStreak++
       return -1
     }
   }
@@ -362,11 +374,15 @@
           revive('no-show')
         } else {
           const t = Number(shown.currentTime) || 0
-          if (!shown.paused && Math.abs(t - watchdogLastTime) < 0.05) watchdogStall++
+          // 暂停也算卡死：素材不是 loop，正常播几秒就该 ended→nextIdle 换段；
+          // 若 paused 且 currentTime 长期不动（典型停在 0.0），说明解码/播放僵住了。
+          const frozen = Math.abs(t - watchdogLastTime) < 0.05
+          if ((!shown.paused || (shown.paused && t < 0.1)) && frozen) watchdogStall++
           else watchdogStall = 0
           watchdogLastTime = t
-          // 画面覆盖率连续偏低 = 空白帧（合成/解码不出画面）
-          if (cov >= 0 && cov < 0.02) watchdogBlank++
+          // 画面覆盖率连续偏低 = 空白帧（合成/解码不出画面）。
+          // cov=-1 表示抓帧失败（合成层失效），连续多次同样要救。
+          if ((cov >= 0 && cov < 0.02) || cov < 0) watchdogBlank++
           else watchdogBlank = 0
           if (watchdogStall >= 3 || watchdogBlank >= 2) {
             revive(watchdogBlank >= 2 ? 'blank-frame' : 'stalled')

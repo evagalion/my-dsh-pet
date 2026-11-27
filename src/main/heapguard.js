@@ -2,21 +2,24 @@
 
 // 主进程内存自监控 + 保守自动回收。
 //
-// 背景（2026-11-27）：主进程 footprint 曾在某次动作后一次性从 78MB 跳到 1405MB，
-// 之后 20 小时稳定不回落。footprint 分解显示 app-specific tag 16（V8 JS 堆）占 1202MB，
-// vmmap 里 SWAPPED 1.3G——是 V8 分配后不归还 OS 的高水位，不是持续泄漏。
-// 打包版进程无法挂调试器拿堆快照，所以用进程内 memoryUsage 自监控记录趋势，
-// 并在堆持续超高水位时自动重启释放（治标，不改动任何功能逻辑）。
+// 背景（2026-11-27）：
+//  - 11-27 上午：主进程 footprint 从 78MB 跳到 1.4G，当时误判为 tag16=JS 堆。
+//  - 11-27 下午：飙到 15G。heap-monitor 证实真凶是 external（原生层内存）从 4MB
+//    在 10 分钟内爬到 12G，而 heapUsed 一直只有 34MB。footprint 分解 tag16=12G、
+//    tag14=2.3G、untagged=1.3G，与 external 吻合——tag16 其实是 external，不是 JS 堆。
+//  上午版本只判 heapUsed，导致 external 暴涨完全没被拦住（auto-restart 0 次）。
+//  这版改为 heapUsed / external 任一超高水位就重启，external 阈值更低。
 
 const { app } = require('electron')
 const fs = require('node:fs')
 const path = require('node:path')
 
-const CHECK_MS = 30000 // 每 30 秒采样一次
-const HIGH_MB = 1000 // heapUsed 超过 1000MB 视为高水位
-const HIGH_TIMES = 3 // 连续 3 次（约 90 秒）才动手，避免误判瞬时峰值
+const CHECK_MS = 15000 // 每 15 秒采样，更早拦住爬升
+const HEAP_HIGH_MB = 1000 // V8 JS 堆高水位
+const EXT_HIGH_MB = 800 // external 原生内存高水位（下午就是它涨到 12G）
+const HIGH_TIMES = 3 // 连续 3 次（约 45 秒）才动手，避免误判瞬时峰值
 const COOLDOWN_MS = 20 * 60 * 1000 // 两次自动重启至少间隔 20 分钟，防止重启循环
-const KEEP_LINES = 400 // 日志保留最近 400 行
+const KEEP_LINES = 400
 
 function createGuard(getUserDataDir) {
   const logFile = path.join(getUserDataDir(), 'heap-monitor.log')
@@ -38,6 +41,7 @@ function createGuard(getUserDataDir) {
   }
 
   let highCount = 0
+  let highReason = ''
   let lastRestart = 0
 
   const check = () => {
@@ -50,15 +54,24 @@ function createGuard(getUserDataDir) {
       external: mb(m.external),
       arrayBuffers: mb(m.arrayBuffers),
     }
-    const high = snap.heapUsed >= HIGH_MB
-    highCount = high ? highCount + 1 : 0
-    log({ ...snap, high, highCount })
+    // 任一维度超阈值就算高水位，并记下是哪个维度
+    let reason = ''
+    if (snap.external >= EXT_HIGH_MB) reason = 'external'
+    else if (snap.heapUsed >= HEAP_HIGH_MB) reason = 'heapUsed'
+
+    if (reason && reason === highReason) highCount++
+    else {
+      highCount = reason ? 1 : 0
+      highReason = reason
+    }
+    log({ ...snap, high: !!reason, highCount, reason })
 
     const now = Date.now()
     if (highCount >= HIGH_TIMES && now - lastRestart >= COOLDOWN_MS) {
       lastRestart = now
       highCount = 0
-      log({ ev: 'auto-restart', reason: 'heapUsed', heapUsed: snap.heapUsed })
+      highReason = ''
+      log({ ev: 'auto-restart', reason, external: snap.external, heapUsed: snap.heapUsed })
       try { app.relaunch() } catch (e) {}
       try { app.exit(0) } catch (e) {}
     }
